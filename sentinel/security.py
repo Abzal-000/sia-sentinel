@@ -12,12 +12,13 @@ Provides:
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -182,6 +183,47 @@ class InputValidator:
 
         return items
 
+    @classmethod
+    def validate_json_body(cls, body: object) -> None:
+        """D9: универсальные проверки строк JSON-тела в middleware.
+
+        Проверяет только то, что не легитимно НИ в одном поле, включая
+        код (продукт аудитит код, поэтому паттерны вроде ``import os``
+        здесь сознательно не применяются — они блокировали бы нормальные
+        сниппеты):
+
+        - null-байты (обрезка строк в файловых/СУБД-слоях, инъекции);
+        - управляющие символы, кроме перевода строк/табуляции.
+
+        Raises:
+            HTTPException 400 при нарушении.
+        """
+        for path, value in _iter_json_strings(body):
+            if "\x00" in value:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"{path} contains null bytes",
+                )
+
+            for char in value:
+                if ord(char) < 32 and char not in "\n\r\t":
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"{path} contains control characters",
+                    )
+
+
+def _iter_json_strings(value: object, path: str = "$") -> Iterator[tuple[str, str]]:
+    """Рекурсивно обходит строки в распарсенном JSON (путь, значение)."""
+    if isinstance(value, str):
+        yield path, value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _iter_json_strings(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            yield from _iter_json_strings(item, f"{path}[{index}]")
+
 
 # === Rate Limiting ===
 
@@ -218,8 +260,24 @@ class RateLimiter:
         self.clients.clear()
 
     def _get_client_key(self, request: Request) -> str:
-        """Get unique key for client (IP + API key if present)."""
+        """Get unique key for client (IP + API key if present).
+
+        D10: behind a reverse proxy the real client IP arrives in
+        ``X-Forwarded-For``. We honour its first hop ONLY when
+        ``TRUST_PROXY=1`` is set — otherwise a client hitting Sentinel
+        directly could forge the header to evade rate limiting.
+        """
         client_ip = request.client.host if request.client else "unknown"
+
+        if os.getenv("TRUST_PROXY") == "1":
+            forwarded = request.headers.get("x-forwarded-for", "")
+
+            if forwarded:
+                first_hop = forwarded.split(",")[0].strip()
+
+                if first_hop:
+                    client_ip = first_hop
+
         api_key = request.headers.get("X-API-Key", "")
 
         # Hash the key for privacy
@@ -331,6 +389,30 @@ class SecurityMiddleware(BaseHTTPMiddleware):
                 content={"detail": exc.detail},
                 headers=exc.headers,
             )
+
+        # D9: validate JSON request bodies (null bytes / control chars).
+        # Only JSON bodies are inspected; the body is re-injected so
+        # downstream handlers see it unchanged.
+        content_type = request.headers.get("content-type", "")
+        if request.method in ("POST", "PUT", "PATCH") and "application/json" in content_type:
+            body = await request.body()
+
+            if body:
+                try:
+                    parsed = json.loads(body)
+                except (json.JSONDecodeError, UnicodeDecodeError):
+                    return JSONResponse(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        content={"detail": "Invalid JSON body"},
+                    )
+
+                try:
+                    InputValidator.validate_json_body(parsed)
+                except HTTPException as exc:
+                    return JSONResponse(
+                        status_code=exc.status_code,
+                        content={"detail": exc.detail},
+                    )
 
         # Process request
         response = await call_next(request)

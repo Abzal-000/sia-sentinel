@@ -16,15 +16,18 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import hmac
+import ipaddress
 import json
 import logging
 import os
 import secrets
+import socket
 import threading
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
+from urllib.parse import urlparse
 
 from .atomic_write import atomic_write_json
 
@@ -58,6 +61,74 @@ def _default_transport(url: str, headers: dict[str, str], body: bytes) -> None:
     import httpx
 
     httpx.post(url, content=body, headers=headers, timeout=DELIVERY_TIMEOUT)
+
+
+def _is_forbidden_ip(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> bool:
+    """D11: внутренний/служебный адрес, недостижимый для внешних вебхуков."""
+    # IPv4-mapped IPv6 (::ffff:10.0.0.1) проверяем как IPv4
+    mapped = getattr(ip, "ipv4_mapped", None)
+
+    if mapped is not None:
+        ip = mapped
+
+    return (
+        ip.is_private
+        or ip.is_loopback
+        or ip.is_link_local
+        or ip.is_reserved
+        or ip.is_multicast
+        or ip.is_unspecified
+    )
+
+
+def validate_webhook_url(url: str) -> None:
+    """D11: SSRF-защита — отклоняет URL, ведущие на внутренние адреса.
+
+    Хост-IP-литерал проверяется напрямую; имя резолвится и проверяются
+    ВСЕ полученные адреса (private/loopback/link-local — включая облачные
+    metadata 169.254.169.254, — reserved/multicast/unspecified). Если имя
+    не резолвится, URL допускается: подключаться не к чему, а доставка
+    перепроверит адрес.
+
+    Raises:
+        ValueError: URL указывает на запрещённый адрес.
+    """
+    hostname = urlparse(url).hostname
+
+    if not hostname:
+        raise ValueError(f"Webhook URL has no host: {url}")
+
+    try:
+        literal = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal = None
+
+    if literal is not None:
+        if _is_forbidden_ip(literal):
+            raise ValueError(
+                f"Webhook URL points to a forbidden address: {hostname}"
+            )
+        return
+
+    try:
+        infos = socket.getaddrinfo(hostname, None, proto=socket.IPPROTO_TCP)
+    except socket.gaierror:
+        logger.warning(
+            "Webhook host %s does not resolve; subscription allowed, "
+            "delivery will re-check",
+            hostname,
+        )
+        return
+
+    for info in infos:
+        resolved = ipaddress.ip_address(info[4][0])
+
+        if _is_forbidden_ip(resolved):
+            raise ValueError(
+                f"Webhook host {hostname} resolves to a forbidden address: {resolved}"
+            )
 
 
 @dataclass
@@ -118,6 +189,8 @@ class OutboundWebhookDispatcher:
         """Создаёт подписку; секрет генерируется, если не задан."""
         if not url.startswith(("http://", "https://")):
             raise ValueError(f"Webhook URL must be http(s): {url}")
+
+        validate_webhook_url(url)  # D11: SSRF-защита
 
         unknown = [e for e in events if e not in KNOWN_EVENTS]
 
@@ -215,7 +288,12 @@ class OutboundWebhookDispatcher:
 
     def _deliver(self, url: str, headers: dict[str, str], body: bytes) -> None:
         try:
+            # D11: повторная SSRF-проверка при доставке — DNS мог измениться
+            # с момента подписки (DNS rebinding)
+            validate_webhook_url(url)
             self._transport(url, headers, body)
+        except ValueError as exc:  # SSRF-защита отклонила URL
+            logger.warning("Webhook delivery to %s blocked: %s", url, exc)
         except Exception as exc:  # подписчик недоступен — аудит не должен страдать
             logger.warning("Webhook delivery to %s failed: %s", url, exc)
 

@@ -176,5 +176,127 @@ class SecurityMiddlewareTestCase(unittest.TestCase):
         self.assertIn("X-RateLimit-Remaining-Minute", response.headers)
 
 
+class InputValidatorJsonBodyTestCase(unittest.TestCase):
+    """D9: универсальная валидация JSON-тел (null-байты, управляющие символы)."""
+
+    def test_null_byte_rejected(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            InputValidator.validate_json_body({"description": "ok\x00evil"})
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("null bytes", ctx.exception.detail)
+
+    def test_control_char_rejected(self) -> None:
+        with self.assertRaises(HTTPException) as ctx:
+            InputValidator.validate_json_body({"nested": {"field": "bad\x01char"}})
+        self.assertEqual(ctx.exception.status_code, 400)
+        self.assertIn("control characters", ctx.exception.detail)
+
+    def test_newlines_tabs_and_code_allowed(self) -> None:
+        # Переводы строк/табуляция и обычный код (включая import os) легитимны
+        body = {
+            "code": "import os\n\ndef f():\n\treturn os.getcwd()\n",
+            "items": ["a", "b"],
+            "count": 3,
+            "flag": True,
+            "nothing": None,
+        }
+        InputValidator.validate_json_body(body)  # не должно бросать
+
+
+class MiddlewareBodyValidationTestCase(unittest.TestCase):
+    """D9: SecurityMiddleware отклоняет опасные JSON-тела до авторизации."""
+
+    def setUp(self) -> None:
+        from sentinel.api import rate_limiter
+
+        rate_limiter.reset()
+        self.client = TestClient(app)
+
+    def test_null_byte_body_rejected_with_400(self) -> None:
+        response = self.client.post(
+            "/v1/verify-change",
+            json={"agent_id": "a", "description": "ok\x00evil"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("null bytes", response.json()["detail"])
+
+    def test_control_char_body_rejected_with_400(self) -> None:
+        response = self.client.post(
+            "/v1/verify-change",
+            json={"agent_id": "a", "description": "bad\x01char"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("control characters", response.json()["detail"])
+
+    def test_legitimate_code_not_blocked_by_middleware(self) -> None:
+        # Код с import os проходит middleware (продукт аудитит код);
+        # без авторизации запрос упирается в 401, а не в 400 middleware.
+        response = self.client.post(
+            "/v1/verify-change",
+            json={
+                "agent_id": "a",
+                "description": "refactor",
+                "target_path": "src/test.py",
+                "current_code": "import os\n",
+                "proposed_code": "import os\nimport sys\n",
+            },
+        )
+        self.assertEqual(response.status_code, 401)
+
+    def test_malformed_json_rejected_with_400(self) -> None:
+        response = self.client.post(
+            "/v1/verify-change",
+            content=b"{not-valid-json",
+            headers={"Content-Type": "application/json"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Invalid JSON", response.json()["detail"])
+
+
+class TrustProxyTestCase(unittest.TestCase):
+    """D10: X-Forwarded-For учитывается только при TRUST_PROXY=1."""
+
+    def _make_request(self, client_host: str, forwarded: str | None) -> Request:
+        request = MagicMock(spec=Request)
+        request.client = MagicMock()
+        request.client.host = client_host
+        request.headers = {"x-forwarded-for": forwarded} if forwarded else {}
+        return request
+
+    def test_forwarded_header_ignored_without_trust_proxy(self) -> None:
+        import os
+
+        os.environ.pop("TRUST_PROXY", None)
+        limiter = RateLimiter()
+
+        plain = limiter._get_client_key(self._make_request("10.0.0.1", None))
+        spoofed = limiter._get_client_key(
+            self._make_request("10.0.0.1", "1.2.3.4, 10.0.0.1")
+        )
+
+        # Подделка заголовка не меняет ключ клиента
+        self.assertEqual(plain, spoofed)
+
+    def test_forwarded_first_hop_used_with_trust_proxy(self) -> None:
+        import os
+
+        os.environ["TRUST_PROXY"] = "1"
+        try:
+            limiter = RateLimiter()
+
+            via_proxy = limiter._get_client_key(
+                self._make_request("10.0.0.1", "1.2.3.4, 10.0.0.1")
+            )
+            direct = limiter._get_client_key(self._make_request("1.2.3.4", None))
+
+            # Первый хоп за прокси совпадает с прямым подключением того же IP
+            self.assertEqual(via_proxy, direct)
+
+            other = limiter._get_client_key(self._make_request("10.0.0.1", None))
+            self.assertNotEqual(via_proxy, other)
+        finally:
+            os.environ.pop("TRUST_PROXY", None)
+
+
 if __name__ == "__main__":
     unittest.main()

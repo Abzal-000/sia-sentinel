@@ -171,6 +171,84 @@ class OutboundWebhooksUnitTestCase(unittest.TestCase):
         self.assertFalse(verify_signature("s3cret", body + b"x", signature))
 
 
+class SSRFProtectionTestCase(unittest.TestCase):
+    """D11: вебхуки не должны ходить на внутренние/служебные адреса."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.file = str(Path(self._tmp.name) / "webhooks.json")
+        self.transport = CapturingTransport()
+        self.dispatcher = OutboundWebhookDispatcher(
+            subscriptions_file=self.file, transport=self.transport
+        )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_forbidden_ip_literals_rejected_at_subscribe(self) -> None:
+        forbidden = [
+            "http://127.0.0.1/hook",          # loopback
+            "http://localhost/hook",          # loopback по имени
+            "http://10.0.0.1/hook",           # private
+            "http://192.168.1.1/hook",        # private
+            "http://172.16.0.1/hook",         # private
+            "http://169.254.169.254/hook",    # cloud metadata (link-local)
+            "http://0.0.0.0/hook",            # unspecified
+            "http://[::1]/hook",              # IPv6 loopback
+            "http://[::ffff:127.0.0.1]/hook", # IPv4-mapped IPv6 loopback
+        ]
+
+        for url in forbidden:
+            with self.assertRaises(ValueError, msg=url):
+                self.dispatcher.subscribe("acme", url, [EVENT_AUDIT_COMPLETED])
+
+    def test_public_ip_literal_allowed(self) -> None:
+        subscription = self.dispatcher.subscribe(
+            "acme", "https://93.184.216.34/hook", [EVENT_AUDIT_COMPLETED]
+        )
+        self.assertIsNotNone(subscription.subscription_id)
+
+    def test_delivery_to_forbidden_url_blocked(self) -> None:
+        # Подписка создана на публичный адрес, но к моменту доставки URL
+        # указывает внутрь (DNS rebinding) — доставка блокируется
+        self.dispatcher._deliver("http://127.0.0.1/hook", {}, b"{}")
+
+        time.sleep(0.05)
+        self.assertEqual(self.transport.calls, [])
+
+    def test_api_rejects_forbidden_url_with_400(self) -> None:
+        from fastapi.testclient import TestClient
+
+        from sentinel.api import app, rate_limiter
+
+        rate_limiter.reset()
+
+        original = api_module.webhook_dispatcher
+        api_module.webhook_dispatcher = self.dispatcher
+
+        try:
+            os.environ["ENABLE_DEMO_LOGIN"] = "1"
+            client = TestClient(app)
+            login = client.post(
+                "/v1/auth/login",
+                json={"username": "admin", "password": "admin123"},
+            )
+            headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+            response = client.post(
+                "/v1/webhooks/subscriptions",
+                json={"url": "http://169.254.169.254/latest/meta-data/",
+                      "events": ["audit.completed"]},
+                headers=headers,
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("forbidden", response.json()["detail"])
+        finally:
+            api_module.webhook_dispatcher = original
+            os.environ.pop("ENABLE_DEMO_LOGIN", None)
+
+
 class OutboundWebhooksAPITestCase(unittest.TestCase):
     """Эндпоинты подписок + доставка при завершении/падении аудита."""
 
