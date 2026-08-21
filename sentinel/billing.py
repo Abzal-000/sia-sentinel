@@ -189,7 +189,7 @@ class BillingEngine:
         self.tenant_manager = tenant_manager
         self.usage_meter = usage_meter
         self.invoices_file = Path(
-            invoices_file or os.getenv("INVOICES_FILE", "invoices.json")
+            invoices_file or os.getenv("INVOICES_FILE") or "invoices.json"
         )
         self._invoices: dict[str, Invoice] = {}
         self._lock = threading.Lock()

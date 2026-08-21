@@ -26,16 +26,17 @@ class EvidenceStore:
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
 
         # Use environment variable or provided key
-        self.signing_key = signing_key or os.getenv("EVIDENCE_SIGNING_KEY")
+        resolved_key = signing_key or os.getenv("EVIDENCE_SIGNING_KEY")
 
-        if not self.signing_key:
+        if not resolved_key:
             # Эфемерный ключ: подписи не переживут рестарт.
-            self.signing_key = secrets.token_hex(32)
+            resolved_key = secrets.token_hex(32)
             print(
                 "WARNING: EVIDENCE_SIGNING_KEY not set — generated an ephemeral key; "
                 "evidence signatures will not survive restarts. "
                 "Set EVIDENCE_SIGNING_KEY in production."
             )
+        self.signing_key: str = resolved_key
 
     def _sign(self, data: dict[str, Any]) -> str:
         """Generate HMAC-SHA256 signature for evidence."""

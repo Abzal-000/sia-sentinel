@@ -31,7 +31,7 @@ def _utcnow() -> _dt.datetime:
     return _dt.datetime.now(_dt.timezone.utc)
 
 
-def _iso(value: Optional[_dt.datetime]) -> Optional[str]:
+def _iso(value: Any) -> Optional[str]:
     return value.isoformat() if value else None
 
 

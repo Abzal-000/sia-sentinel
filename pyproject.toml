@@ -59,3 +59,9 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
+
+# docker-py ships no type information; treat it as Any instead of an
+# empty module (mypy 2.x otherwise reports every attribute access).
+[[tool.mypy.overrides]]
+module = ["docker", "docker.*"]
+follow_untyped_imports = true

@@ -33,11 +33,15 @@ jobs:
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install ruff
+        pip install ruff mypy
 
-    - name: Lint with ruff (bug rules)
+    - name: Lint with ruff (full config)
       run: |
-        ruff check sia/ sentinel/ tests/ --select E9,F63,F7,F82
+        ruff check sia/ sentinel/ tests/
+
+    - name: Type check with mypy
+      run: |
+        mypy sia/ sentinel/
 
     - name: Run test suite
       run: |

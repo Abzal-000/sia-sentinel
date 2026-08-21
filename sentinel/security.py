@@ -17,7 +17,7 @@ import re
 import time
 from collections import defaultdict
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Callable, Optional
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
@@ -162,7 +162,7 @@ class InputValidator:
         items: list,
         field_name: str,
         max_items: int = 100,
-        item_validator: Optional[callable] = None,
+        item_validator: Optional[Callable] = None,
     ) -> list:
         """Validate list input."""
         if not isinstance(items, list):

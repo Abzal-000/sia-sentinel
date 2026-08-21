@@ -12,7 +12,8 @@ try:
     from docker.errors import ImageNotFound
     DOCKER_AVAILABLE = True
 except ImportError:
-    docker = None
+    docker = None  # type: ignore[assignment]
+    ImageNotFound = Exception  # type: ignore[misc,assignment]
     DOCKER_AVAILABLE = False
 
 

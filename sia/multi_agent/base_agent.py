@@ -60,7 +60,7 @@ class BaseAgent(ABC):
             timeout=self.request_timeout,
         )
 
-        last_error = None
+        last_error: Optional[Exception] = None
         for attempt in range(max_retries):
             try:
                 response = client.chat.completions.create(
@@ -82,7 +82,8 @@ class BaseAgent(ABC):
                 else:
                     raise
 
-        raise last_error
+        # Недостижимо: цикл либо возвращает результат, либо бросает исключение.
+        raise last_error if last_error is not None else RuntimeError("no attempts made")
 
     @staticmethod
     def _parse_json_response(raw: str) -> dict[str, Any]:

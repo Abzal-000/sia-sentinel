@@ -36,7 +36,7 @@ def _benchmark_worker(
     Вынесена на уровень модуля, чтобы быть picklable на Windows.
     """
 
-    namespace = {}
+    namespace: dict[str, Any] = {}
     try:
         exec(compile(code, "<string>", "exec"), namespace)
     except Exception as e:
@@ -71,7 +71,7 @@ def _benchmark_process(
     """
     try:
         result = _benchmark_worker(code, func_name, args, kwargs, repeat, iterations)
-        payload = ("ok", result)
+        payload: tuple[str, Any] = ("ok", result)
     except BaseException as exc:  # noqa: BLE001 — пробрасываем текстом, не pickle
         payload = ("error", f"{type(exc).__name__}: {exc}")
 
@@ -146,13 +146,15 @@ class EvaluationEngine:
         kwargs_template: Optional[dict[str, Any]] = None,
     ) -> float:
         """Сравнивает производительность старой и новой версий функции."""
-        return self.compare_performance_detailed(
+        details = self.compare_performance_detailed(
             old_code,
             new_code,
             function_name,
             args_template=args_template,
             kwargs_template=kwargs_template,
-        )["gain"]
+        )
+        gain = details["gain"]
+        return gain if gain is not None else 0.0
 
     def compare_performance_detailed(
         self,
@@ -501,10 +503,12 @@ class EvaluationEngine:
         cost_reduction: Optional[float] = None
         savings: Optional[SavingsResult] = None
 
-        if self.cost_model is not None and performance_details.get("old_time_sec") is not None:
+        old_time_sec = performance_details.get("old_time_sec")
+        new_time_sec = performance_details.get("new_time_sec")
+        if self.cost_model is not None and old_time_sec is not None and new_time_sec is not None:
             savings = self.cost_model.compare(
-                self.cost_model.compute_cost(performance_details["old_time_sec"]),
-                self.cost_model.compute_cost(performance_details["new_time_sec"]),
+                self.cost_model.compute_cost(old_time_sec),
+                self.cost_model.compute_cost(new_time_sec),
             )
             old_cost_usd = savings.old_unit_cost_usd
             new_cost_usd = savings.new_unit_cost_usd
@@ -548,7 +552,7 @@ class EvaluationEngine:
         code: str,
         function_name: str,
         args: tuple = (),
-        kwargs: dict = None,
+        kwargs: Optional[dict] = None,
         timeout: float = 10.0,
     ) -> float:
         """Измеряет время выполнения функции в отдельном процессе с жёстким таймаутом.

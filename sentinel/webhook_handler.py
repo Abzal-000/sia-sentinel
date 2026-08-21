@@ -248,7 +248,7 @@ class WebhookHandler:
 
     def _extract_added_lines(self, diff: str, file_path: str) -> list[str]:
         """Extract added lines from diff for a specific file."""
-        lines = []
+        lines: list[str] = []
 
         # Find the section for this file
         file_section_pattern = re.compile(

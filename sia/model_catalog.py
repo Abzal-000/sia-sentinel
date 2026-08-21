@@ -133,4 +133,4 @@ class ModelCatalog:
         if not isinstance(models, list) or not models:
             raise ValueError(f"Catalog file must contain a non-empty 'models' list: {path}")
 
-        return cls(ModelSpec.from_dict(item) for item in models)
+        return cls([ModelSpec.from_dict(item) for item in models])

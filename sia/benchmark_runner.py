@@ -70,6 +70,10 @@ class BenchmarkRunner:
         self.performance_repeat = performance_repeat
 
     def _build_orchestrator(self, language: str = "python") -> Orchestrator:
+        # JS-варианты (JsSandboxExecutor/JsConstitutionalLayer/JsEvaluationEngine) —
+        # duck-typed аналоги Python-классов без общего базового интерфейса.
+        sandbox: Any
+        safety_guard: Any
         if language == "javascript":
             from .js_sandbox import JsSandboxExecutor
             from .js_constitutional import JsConstitutionalLayer
@@ -79,7 +83,7 @@ class BenchmarkRunner:
             sandbox = SandboxExecutor(timeout_sec=self.sandbox_timeout)
             safety_guard = ConstitutionalAILayer()
 
-        evaluation_engine = (
+        evaluation_engine: Any = (
             JsEvaluationEngine(
                 performance_iterations=self.performance_iterations,
                 performance_repeat=self.performance_repeat,

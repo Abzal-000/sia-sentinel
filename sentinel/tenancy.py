@@ -53,7 +53,7 @@ class TenantManager:
 
     def __init__(self, tenants_file: Optional[str] = None):
         self.tenants_file = Path(
-            tenants_file or os.getenv("TENANTS_FILE", "tenants.json")
+            tenants_file or os.getenv("TENANTS_FILE") or "tenants.json"
         )
         self.tenants: dict[str, Tenant] = {}
         self._lock = threading.Lock()
@@ -169,7 +169,7 @@ class UsageMeter:
 
     def __init__(self, usage_file: Optional[str] = None):
         self.usage_file = Path(
-            usage_file or os.getenv("USAGE_EVENTS_FILE", "usage_events.jsonl")
+            usage_file or os.getenv("USAGE_EVENTS_FILE") or "usage_events.jsonl"
         )
         self._lock = threading.Lock()
 

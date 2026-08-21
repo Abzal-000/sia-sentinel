@@ -114,7 +114,7 @@ class ReceiptRegistry:
     """Append-only журнал квитанций с хеш-цепочкой и чекпоинтами."""
 
     def __init__(self, storage_dir: Optional[str] = None):
-        self.storage_dir = Path(storage_dir or os.getenv("RECEIPTS_DIR", "receipts"))
+        self.storage_dir = Path(storage_dir or os.getenv("RECEIPTS_DIR") or "receipts")
         self.registry_file = self.storage_dir / "registry.jsonl"
         self.checkpoint_file = self.storage_dir / "checkpoints.jsonl"
         self.storage_dir.mkdir(parents=True, exist_ok=True)

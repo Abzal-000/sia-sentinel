@@ -19,7 +19,7 @@ from sia.flow_runner import (
     run_flow_audit,
     validate_api_flow,
 )
-from sia.models import Task, TrustLevel
+from sia.models import Task
 from sia.trust_level_manager import TrustLevelManager
 
 from .audit_jobs import AuditJobManager
@@ -1599,7 +1599,7 @@ async def login(request: LoginRequest) -> dict[str, Any]:
         )
 
     # Demo credentials - in production use proper auth
-    demo_users = {
+    demo_users: dict[str, dict[str, Any]] = {
         "admin": {"password": "admin123", "role": UserRole.ADMIN},
         "verifier": {"password": "verifier123", "role": UserRole.VERIFIER},
         "user": {"password": "user123", "role": UserRole.USER},

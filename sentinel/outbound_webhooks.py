@@ -97,7 +97,7 @@ class OutboundWebhookDispatcher:
         transport: Optional[Callable[[str, dict[str, str], bytes], None]] = None,
     ):
         self.subscriptions_file = Path(
-            subscriptions_file or os.getenv("WEBHOOKS_FILE", "webhooks.json")
+            subscriptions_file or os.getenv("WEBHOOKS_FILE") or "webhooks.json"
         )
         self._transport = transport or _default_transport
         self._subscriptions: dict[str, WebhookSubscription] = {}

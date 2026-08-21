@@ -137,11 +137,13 @@ class ProofOfSavingsAuditor:
 
         costs: Optional[SavingsResult] = None
 
-        if pricing is not None and performance.get("old_time_sec") is not None:
+        old_time_sec = performance.get("old_time_sec")
+        new_time_sec = performance.get("new_time_sec")
+        if pricing is not None and old_time_sec is not None and new_time_sec is not None:
             cost_model = CostModel(pricing)
             costs = cost_model.compare(
-                cost_model.compute_cost(performance["old_time_sec"]),
-                cost_model.compute_cost(performance["new_time_sec"]),
+                cost_model.compute_cost(old_time_sec),
+                cost_model.compute_cost(new_time_sec),
             )
 
         quality_score = self.evaluation.calculate_quality_score(new_code)

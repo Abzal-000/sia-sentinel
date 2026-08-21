@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal, overload
 
 from .audit import ProofOfSavingsAuditor
 from .config import resolve_env
@@ -93,7 +93,15 @@ def run_flow_audit(flow: dict[str, Any]) -> dict[str, Any]:
     raise ValueError(f"Unknown flow kind: {kind}")
 
 
-def _resolve_text(flow: dict[str, Any], inline_key: str, file_key: str, required: bool) -> str | None:
+@overload
+def _resolve_text(flow: dict[str, Any], inline_key: str, file_key: str, required: Literal[True]) -> str: ...
+
+
+@overload
+def _resolve_text(flow: dict[str, Any], inline_key: str, file_key: str, required: Literal[False]) -> str | None: ...
+
+
+def _resolve_text(flow: dict[str, Any], inline_key: str, file_key: str, required: bool = True) -> str | None:
     if flow.get(inline_key):
         return flow[inline_key]
 

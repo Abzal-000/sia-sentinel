@@ -11,8 +11,7 @@ from typing import Any
 
 from sqlalchemy import create_engine, Column, String, Text, DateTime, Integer, Boolean, Index
 from sqlalchemy import JSON
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import DeclarativeBase, sessionmaker
 from sqlalchemy.pool import QueuePool, StaticPool
 from datetime import datetime, timezone
 from contextlib import contextmanager
@@ -55,7 +54,9 @@ engine = create_engine(
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-Base = declarative_base()
+
+class Base(DeclarativeBase):
+    """Declarative base for all ORM models."""
 
 
 # === ORM Models ===
@@ -163,11 +164,21 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
 
 
-def get_db() -> Session:
-    """Get database session."""
+@contextmanager
+def get_db():
+    """Context manager yielding an open database session.
+
+    The session is committed on success, rolled back on error, and always
+    closed. (Previously returned an already-closed session — the ``finally``
+    ran before the caller could use it.)
+    """
     db = SessionLocal()
     try:
-        return db
+        yield db
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
     finally:
         db.close()
 
@@ -179,7 +190,7 @@ def get_db_session():
     try:
         yield db
         db.commit()
-    except:
+    except Exception:
         db.rollback()
         raise
     finally:

@@ -14,6 +14,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExporter,
     SpanExportResult,
 )
+from opentelemetry.sdk.trace.export import SpanProcessor
 
 
 _tracer_provider: Optional[TracerProvider] = None
@@ -52,7 +53,7 @@ def init_tracing(
     provider = TracerProvider(resource=resource)
 
     if exporter == "console":
-        processor = SimpleSpanProcessor(ConsoleSpanExporter())
+        processor: SpanProcessor = SimpleSpanProcessor(ConsoleSpanExporter())
         provider.add_span_processor(processor)
     elif exporter == "file":
         processor = SimpleSpanProcessor(FileSpanExporter(file_path=traces_file))

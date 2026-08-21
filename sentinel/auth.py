@@ -29,9 +29,11 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, APIKeyHea
 
 # === Configuration ===
 
-JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+_env_jwt_secret = os.getenv("JWT_SECRET_KEY")
 
-if not JWT_SECRET_KEY:
+if _env_jwt_secret:
+    JWT_SECRET_KEY = _env_jwt_secret
+else:
     # Эфемерный секрет: токены не переживут рестарт. Для продакшена
     # обязателен стабильный JWT_SECRET_KEY из окружения.
     JWT_SECRET_KEY = secrets.token_hex(32)
@@ -124,7 +126,7 @@ class APIKeyManager:
     LAST_USED_FLUSH_SECONDS = 60.0
 
     def __init__(self, keys_file: Optional[str] = None):
-        self.keys_file = Path(keys_file or os.getenv("API_KEYS_FILE", "api_keys.json"))
+        self.keys_file = Path(keys_file or os.getenv("API_KEYS_FILE") or "api_keys.json")
         self.keys: dict[str, APIKey] = {}
         self._lock = threading.Lock()
         self._last_used_saved_at = 0.0
