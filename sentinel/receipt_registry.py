@@ -35,7 +35,7 @@ import tempfile
 import threading
 import uuid
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, Protocol
 
 from .atomic_write import append_line_durable
 from .cryptographic_receipts import (
@@ -51,6 +51,12 @@ GENESIS_HASH = "0" * 64
 CHECKPOINT_PROTOCOL = "trustchain-checkpoint/1"
 # v2: чекпоинт покрывает и Merkle tree head (C1)
 CHECKPOINT_PROTOCOL_V2 = "trustchain-checkpoint/2"
+
+
+class _ReceiptVerifierLike(Protocol):
+    """Интерфейс верификатора квитанций (ReceiptVerifier или KeyringVerifier)."""
+
+    def verify(self, receipt: CryptographicReceipt) -> bool: ...
 
 
 class _FileLock:
@@ -263,6 +269,97 @@ class ReceiptRegistry:
             append_line_durable(self.registry_file, json.dumps(entry, default=str))
 
         return registry_id
+
+    def register_key_declaration(
+        self,
+        kid: str,
+        public_key: str,
+        generator: ReceiptGenerator,
+        purpose: str = "receipt-signing",
+    ) -> str:
+        """C3: декларация ключа как запись самой цепочки.
+
+        Запись entry_type="key" фиксирует соответствие kid → публичный
+        ключ и подписана АКТИВНЫМ ключом генератора (поле
+        metadata.signature). Так верификатор восстанавливает таблицу
+        kid→ключ из самой цепочки, не доверяя внешнему источнику:
+        подделать декларацию можно только скомпрометировав активный ключ.
+
+        Первая декларация (генезис ключа) подписывает сама себя. При
+        ротации новый ключ декларируется записью, подписанной старым
+        (ещё активным) ключом, — цепочка доверия непрерывна.
+        """
+        registry_id = uuid.uuid4().hex
+        registered_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+        declaration = {
+            "kid": kid,
+            "public_key": public_key,
+            "purpose": purpose,
+            "declared_at": registered_at,
+        }
+
+        with self._lock, _FileLock(self._file_lock_path):
+            self._drop_torn_tail_unlocked()
+            head = self._head_unlocked()
+            seq = head["seq"] + 1 if head else 1
+            prev_hash = head["entry_hash"] if head else GENESIS_HASH
+
+            entry = {
+                "seq": seq,
+                "prev_hash": prev_hash,
+                "registry_id": registry_id,
+                "registered_at": registered_at,
+                "receipt": None,
+                "metadata": {
+                    "entry_type": "key",
+                    "key_declaration": declaration,
+                    "signature": generator.sign_bytes(
+                        _canonical_json(declaration)
+                    ),
+                    "signer_kid": generator.kid,
+                },
+            }
+            entry_hash = _entry_hash(seq, prev_hash, entry)
+            entry["entry_hash"] = entry_hash
+
+            append_line_durable(self.registry_file, json.dumps(entry, default=str))
+            self._extend_cache_unlocked(seq, prev_hash, entry_hash, registry_id)
+
+        return registry_id
+
+    def key_declarations(self) -> list[dict[str, Any]]:
+        """C3: все декларации ключей из цепочки в порядке записи."""
+        declarations = []
+
+        for entry in self._load_entries():
+            metadata = entry.get("metadata") or {}
+
+            if metadata.get("entry_type") != "key":
+                continue
+
+            declarations.append(
+                {
+                    "registry_id": entry.get("registry_id"),
+                    "seq": entry.get("seq"),
+                    "registered_at": entry.get("registered_at"),
+                    "declaration": metadata.get("key_declaration"),
+                    "signature": metadata.get("signature"),
+                    "signer_kid": metadata.get("signer_kid"),
+                }
+            )
+
+        return declarations
+
+    def resolve_key(self, kid: str) -> Optional[str]:
+        """C3: публичный ключ по kid из деклараций цепочки (None, если нет)."""
+        for declaration in self.key_declarations():
+            decl = declaration.get("declaration") or {}
+
+            if decl.get("kid") == kid:
+                return decl.get("public_key")
+
+        return None
 
     def get_preregistration(self, registry_id: str) -> Optional[dict[str, Any]]:
         """Возвращает обязательство предрегистрации по идентификатору.
@@ -527,7 +624,9 @@ class ReceiptRegistry:
 
         return published[offset:offset + limit]
 
-    def verify_stored(self, registry_id: str, verifier: ReceiptVerifier) -> Optional[bool]:
+    def verify_stored(
+        self, registry_id: str, verifier: _ReceiptVerifierLike
+    ) -> Optional[bool]:
         """Проверяет подпись сохранённой квитанции; None — запись не найдена."""
         entry = self.get(registry_id)
 
@@ -875,6 +974,7 @@ class ReceiptRegistry:
                 "registry_id": head["registry_id"],
                 "tree_size": acc.tree_size,
                 "root_hash": acc.root_hash(),
+                "kid": generator.kid,
                 "public_key": generator.get_public_key(),
             }
             checkpoint["signature"] = generator.sign_bytes(
@@ -921,5 +1021,8 @@ def _checkpoint_commitment(checkpoint: dict[str, Any]) -> bytes:
     if checkpoint.get("protocol") == CHECKPOINT_PROTOCOL_V2:
         commitment["tree_size"] = checkpoint.get("tree_size")
         commitment["root_hash"] = checkpoint.get("root_hash")
+
+        if checkpoint.get("kid") is not None:
+            commitment["kid"] = checkpoint.get("kid")
 
     return _canonical_json(commitment)

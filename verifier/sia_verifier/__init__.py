@@ -38,11 +38,13 @@ from .core import (
     AttestationVerdict,
     ChainVerdict,
     leaf_hash,
+    resolve_receipt_key,
     verify_attestation,
     verify_chain,
     verify_checkpoint,
     verify_consistency,
     verify_inclusion,
+    verify_key_declarations,
     verify_receipt,
 )
 
@@ -53,11 +55,13 @@ __all__ = [
     "AttestationVerdict",
     "ChainVerdict",
     "leaf_hash",
+    "resolve_receipt_key",
     "verify_attestation",
     "verify_chain",
     "verify_checkpoint",
     "verify_consistency",
     "verify_inclusion",
+    "verify_key_declarations",
     "verify_receipt",
     "__version__",
 ]

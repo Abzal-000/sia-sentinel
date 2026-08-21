@@ -40,6 +40,9 @@ class CryptographicReceipt:
     nonce: str
     signature: str
     manifest: Optional[dict[str, Any]] = None
+    # C3: идентификатор ключа, которым подписана квитанция. None для
+    # квитанций, выпущенных до введения ротации ключей.
+    kid: Optional[str] = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary."""
@@ -56,6 +59,9 @@ def _commitment_string(receipt: CryptographicReceipt) -> bytes:
     receipt_id is part of the signed commitment (H1) so a signature
     cannot be lifted off one receipt and replayed against a different
     receipt_id.
+
+    C3: ``kid`` входит в коммитмент, когда задан, — подпись привязана к
+    конкретному ключу. Legacy-квитанции без kid сериализуются как раньше.
     """
     commitment: dict[str, Any] = {
         "receipt_id": receipt.receipt_id,
@@ -69,6 +75,9 @@ def _commitment_string(receipt: CryptographicReceipt) -> bytes:
 
     if receipt.manifest is not None:
         commitment["manifest"] = receipt.manifest
+
+    if receipt.kid is not None:
+        commitment["kid"] = receipt.kid
 
     return json.dumps(commitment, sort_keys=True, separators=(',', ':')).encode('utf-8')
 
@@ -128,6 +137,21 @@ class ReceiptGenerator:
 
         self._private_key = _derive_private_key(signing_key)
 
+    @property
+    def kid(self) -> str:
+        """C3: идентификатор ключа — короткий отпечаток публичного ключа.
+
+        kid = первые 16 hex-символов SHA256(raw публичного ключа).
+        Детерминирован: один и тот же ключ всегда даёт один kid, поэтому
+        декларации ключей в цепочке и квитанции согласованы без внешнего
+        реестра.
+        """
+        raw = self._private_key.public_key().public_bytes(
+            Encoding.Raw,
+            PublicFormat.Raw,
+        )
+        return hashlib.sha256(raw).hexdigest()[:16]
+
     def get_public_key(self) -> str:
         """Return the base64 raw public key matching the signing key."""
         raw = self._private_key.public_key().public_bytes(
@@ -183,6 +207,7 @@ class ReceiptGenerator:
             nonce=nonce,
             signature="",
             manifest=manifest,
+            kid=self.kid,
         )
 
         receipt.signature = self._sign(_commitment_string(receipt))
@@ -289,6 +314,53 @@ class ReceiptVerifier:
 
         try:
             self._public_key.verify(signature, data)
+            return True
+        except (InvalidSignature, ValueError):
+            return False
+
+
+class KeyringVerifier:
+    """C3: верификатор, знающий несколько ключей по kid.
+
+    После ротации ключа старые квитанции подписаны старым ключом, новые —
+    новым. KeyringVerifier держит таблицу kid → публичный ключ и выбирает
+    ключ по ``receipt.kid``; для legacy-квитанций без kid используется
+    fallback-ключ (текущий на момент до ротации).
+    """
+
+    def __init__(self, fallback_public_key: Optional[str] = None):
+        self._keys: dict[str, Ed25519PublicKey] = {}
+        self._fallback: Optional[Ed25519PublicKey] = (
+            _load_public_key(fallback_public_key) if fallback_public_key else None
+        )
+
+    def add_key(self, kid: str, public_key_b64: str) -> None:
+        """Регистрирует публичный ключ под kid (невалидный — ValueError)."""
+        self._keys[kid] = _load_public_key(public_key_b64)
+
+    def set_fallback(self, public_key_b64: str) -> None:
+        self._fallback = _load_public_key(public_key_b64)
+
+    def _key_for(self, receipt: CryptographicReceipt) -> Optional[Ed25519PublicKey]:
+        if receipt.kid is not None:
+            return self._keys.get(receipt.kid)
+
+        return self._fallback
+
+    def verify(self, receipt: CryptographicReceipt) -> bool:
+        """Проверяет квитанцию ключом, соответствующим её kid."""
+        public_key = self._key_for(receipt)
+
+        if public_key is None:
+            return False
+
+        try:
+            signature = base64.b64decode(receipt.signature, validate=True)
+        except Exception:
+            return False
+
+        try:
+            public_key.verify(signature, _commitment_string(receipt))
             return True
         except (InvalidSignature, ValueError):
             return False

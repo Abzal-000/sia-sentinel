@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+# Пакет верификатора лежит в verifier/ — добавляем в sys.path для тестов
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "verifier"))
 
 from fastapi.testclient import TestClient
 
@@ -180,6 +184,100 @@ class AttestationAPITestCase(unittest.TestCase):
         self.assertEqual(response.headers["content-type"], "image/svg+xml")
         self.assertIn("Proof-of-Savings", response.text)
         self.assertIn("verified", response.text)
+
+
+class KeyRotationTestCase(AttestationAPITestCase):
+    """C3: ротация ключа подписи — старые квитанции остаются проверяемыми."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # Ротация мутирует модульные генератор/кейринг — сохраняем для отката
+        self._original_generator = api_module.receipt_generator
+        self._original_keyring = api_module.receipt_keyring
+
+    def tearDown(self) -> None:
+        api_module.receipt_generator = self._original_generator
+        api_module.receipt_keyring = self._original_keyring
+        super().tearDown()
+
+    def test_rotate_requires_admin(self) -> None:
+        response = self.client.post("/v1/ledger/keys/rotate", json={})
+        self.assertEqual(response.status_code, 401)
+
+    def test_rotate_declares_new_key_in_chain(self) -> None:
+        result = self.client.post(
+            "/v1/ledger/keys/rotate", json={}, headers=self._auth_headers
+        )
+        self.assertEqual(result.status_code, 200)
+
+        body = result.json()
+        self.assertNotEqual(body["old_kid"], body["new_kid"])
+        self.assertIsNotNone(body["new_signing_key"])  # сгенерирован сервером
+        self.assertIsNotNone(body["declaration_registry_id"])
+
+        # Декларации видны в цепочке
+        keys = self.client.get("/v1/ledger/keys").json()
+        self.assertEqual(keys["active_kid"], body["new_kid"])
+        kids = [d["declaration"]["kid"] for d in keys["declarations"]]
+        self.assertIn(body["old_kid"], kids)
+        self.assertIn(body["new_kid"], kids)
+
+    def test_old_receipt_still_verifies_after_rotation(self) -> None:
+        old_registry_id = self._register_audit()
+
+        self.client.post("/v1/ledger/keys/rotate", json={}, headers=self._auth_headers)
+
+        # Старая квитанция (подписана старым ключом) всё ещё валидна
+        verify = self.client.get(
+            f"/v1/receipts/{old_registry_id}/verify", headers=self._auth_headers
+        ).json()
+        self.assertTrue(verify["valid"])
+
+    def test_new_receipt_uses_new_key(self) -> None:
+        rotate = self.client.post(
+            "/v1/ledger/keys/rotate", json={}, headers=self._auth_headers
+        ).json()
+
+        new_registry_id = self._register_audit()
+
+        verify = self.client.get(
+            f"/v1/receipts/{new_registry_id}/verify", headers=self._auth_headers
+        ).json()
+        self.assertTrue(verify["valid"])
+        self.assertEqual(verify["kid"], rotate["new_kid"])
+        self.assertEqual(verify["public_key"], rotate["new_public_key"])
+
+    def test_attestation_issuer_key_matches_receipt_after_rotation(self) -> None:
+        old_registry_id = self._register_audit()
+        old_key = self.client.get(
+            f"/v1/receipts/{old_registry_id}/verify", headers=self._auth_headers
+        ).json()["public_key"]
+
+        self.client.post("/v1/ledger/keys/rotate", json={}, headers=self._auth_headers)
+
+        # Аттестация старой квитанции несёт СТАРЫЙ ключ, а не текущий активный
+        attestation = self.client.get(f"/v1/attestations/{old_registry_id}").json()
+        self.assertEqual(attestation["issuer"]["public_key"], old_key)
+        self.assertTrue(attestation["verification"]["receipt_signature_valid"])
+
+    def test_independent_verifier_reconstructs_key_table(self) -> None:
+        """sia-verifier восстанавливает kid→ключ из деклараций и проверяет."""
+        import sia_verifier
+
+        old_registry_id = self._register_audit()
+        self.client.post("/v1/ledger/keys/rotate", json={}, headers=self._auth_headers)
+        new_registry_id = self._register_audit()
+
+        declarations = self.client.get("/v1/ledger/keys").json()["declarations"]
+        ok, keys = sia_verifier.verify_key_declarations(declarations)
+        self.assertTrue(ok)
+
+        for registry_id in (old_registry_id, new_registry_id):
+            entry = api_module.receipt_registry.get(registry_id)
+            receipt = entry["receipt"]
+            key = sia_verifier.resolve_receipt_key(receipt, declarations)
+            self.assertIsNotNone(key)
+            self.assertTrue(sia_verifier.verify_receipt(receipt, key))
 
     def test_attestation_is_public_no_auth(self) -> None:
         registry_id = self._register_audit()

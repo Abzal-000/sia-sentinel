@@ -56,7 +56,8 @@ def _receipt_commitment(receipt: dict[str, Any]) -> bytes:
     """Коммитмент квитанции, покрытый подписью (spec §2.1).
 
     ``receipt_id`` входит в коммитмент: подпись нельзя перенести с одной
-    квитанции на другую.
+    квитанции на другую. C3: ``kid`` входит, когда задан (квитанции,
+    выпущенные после введения ротации ключей).
     """
     commitment: dict[str, Any] = {
         "receipt_id": receipt.get("receipt_id"),
@@ -70,6 +71,9 @@ def _receipt_commitment(receipt: dict[str, Any]) -> bytes:
 
     if receipt.get("manifest") is not None:
         commitment["manifest"] = receipt["manifest"]
+
+    if receipt.get("kid") is not None:
+        commitment["kid"] = receipt["kid"]
 
     return _canonical_json(commitment)
 
@@ -271,6 +275,9 @@ def _checkpoint_commitment(checkpoint: dict[str, Any]) -> bytes:
         commitment["tree_size"] = checkpoint.get("tree_size")
         commitment["root_hash"] = checkpoint.get("root_hash")
 
+        if checkpoint.get("kid") is not None:
+            commitment["kid"] = checkpoint.get("kid")
+
     return _canonical_json(commitment)
 
 
@@ -287,6 +294,81 @@ def verify_checkpoint(checkpoint: dict[str, Any], public_key_b64: str) -> bool:
         return True
     except (InvalidSignature, ValueError, TypeError):
         return False
+
+
+# === Ротация ключей (C3) ===
+
+
+def verify_key_declarations(
+    declarations: list[dict[str, Any]],
+) -> tuple[bool, dict[str, str]]:
+    """Восстанавливает таблицу kid → публичный ключ из деклараций цепочки.
+
+    Каждая декларация — {declaration: {kid, public_key, ...}, signature,
+    signer_kid}. Подпись покрывает канонический JSON декларации и ставится
+    АКТИВНЫМ на момент записи ключом (signer_kid):
+
+    - генезис-декларация подписана самим декларируемым ключом (self-signed);
+    - при ротации новый ключ декларируется записью, подписанной старым
+      (ещё активным) ключом, уже объявленным ранее в цепочке.
+
+    Возвращает (все_подписи_валидны, {kid: public_key}). При первой же
+    невалидной подписи или неизвестном signer_kid останавливается и
+    возвращает False с таблицей, построенной до точки отказа.
+    """
+    keys: dict[str, str] = {}
+
+    for record in declarations:
+        declaration = record.get("declaration") or {}
+        kid = declaration.get("kid")
+        public_key_b64 = declaration.get("public_key")
+        signature = record.get("signature")
+        signer_kid = record.get("signer_kid")
+
+        if not kid or not public_key_b64 or not signature:
+            return False, keys
+
+        # Публичный ключ подписанта: сам декларируемый ключ (генезис) либо
+        # ранее объявленный ключ (ротация)
+        signer_key_b64 = keys.get(signer_kid)
+
+        if signer_key_b64 is None:
+            if signer_kid == kid:
+                signer_key_b64 = public_key_b64  # self-signed генезис
+            else:
+                return False, keys  # подписант не объявлен в цепочке
+
+        try:
+            signer_key = _load_public_key(signer_key_b64)
+            signer_key.verify(
+                base64.b64decode(signature, validate=True),
+                _canonical_json(declaration),
+            )
+        except (InvalidSignature, ValueError, TypeError):
+            return False, keys
+
+        keys[kid] = public_key_b64
+
+    return True, keys
+
+
+def resolve_receipt_key(
+    receipt: dict[str, Any],
+    declarations: list[dict[str, Any]],
+    fallback_public_key: Optional[str] = None,
+) -> Optional[str]:
+    """Публичный ключ для проверки квитанции с учётом ротации (C3).
+
+    Если у квитанции есть ``kid``, ключ берётся из деклараций цепочки.
+    Иначе (legacy-квитанция без kid) используется ``fallback_public_key``.
+    """
+    kid = receipt.get("kid")
+
+    if kid is None:
+        return fallback_public_key
+
+    _, keys = verify_key_declarations(declarations)
+    return keys.get(kid)
 
 
 # === Merkle-доказательства (C1, RFC 6962) ===

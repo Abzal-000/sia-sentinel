@@ -4,7 +4,11 @@ import datetime
 import hashlib
 import json
 import uuid
-from sentinel.cryptographic_receipts import ReceiptGenerator, ReceiptVerifier
+from sentinel.cryptographic_receipts import (
+    KeyringVerifier,
+    ReceiptGenerator,
+    ReceiptVerifier,
+)
 import os
 from pathlib import Path
 from typing import Any, Optional
@@ -484,7 +488,9 @@ def verify_receipt(request: dict) -> dict[str, Any]:
             return {"valid": False, "error": "No receipt provided"}
 
         receipt = CryptographicReceipt(**receipt_dict)
-        is_valid = receipt_verifier.verify(receipt)
+        # C3: keyring знает все объявленные ключи — квитанции проверяемы
+        # и после ротации (по kid)
+        is_valid = receipt_keyring.verify(receipt)
 
         return {
             "valid": is_valid,
@@ -512,6 +518,21 @@ tenant_manager = TenantManager()
 usage_meter = UsageMeter()
 billing_engine = BillingEngine(tenant_manager, usage_meter)
 webhook_dispatcher = OutboundWebhookDispatcher()
+
+# C3: keyring-верификатор знает все объявленные в цепочке ключи, поэтому
+# квитанции остаются проверяемыми после ротации. Fallback — текущий ключ
+# (для legacy-квитанций без kid).
+receipt_keyring = KeyringVerifier(receipt_generator.get_public_key())
+receipt_keyring.add_key(receipt_generator.kid, receipt_generator.get_public_key())
+
+# Генезис-декларация активного ключа в цепочке (идемпотентно: если kid уже
+# объявлен, повторно не пишем).
+if receipt_registry.resolve_key(receipt_generator.kid) is None:
+    receipt_registry.register_key_declaration(
+        kid=receipt_generator.kid,
+        public_key=receipt_generator.get_public_key(),
+        generator=receipt_generator,
+    )
 
 
 def _check_quota_or_402(tenant_id: str, kind: str) -> None:
@@ -1306,15 +1327,24 @@ def verify_registered_receipt(
     if not user.is_platform_admin and entry_tenant != user.tenant_id:
         raise HTTPException(status_code=404, detail=f"Receipt not found: {registry_id}")
 
-    valid = receipt_registry.verify_stored(registry_id, receipt_verifier)
+    valid = receipt_registry.verify_stored(registry_id, receipt_keyring)
 
     if valid is None:
         raise HTTPException(status_code=404, detail=f"Receipt not found: {registry_id}")
 
+    # C3: публичный ключ, которым подписана именно эта квитанция (по kid)
+    receipt_kid = ((entry.get("receipt") or {}).get("kid"))
+    signing_key = (
+        receipt_registry.resolve_key(receipt_kid)
+        if receipt_kid
+        else receipt_generator.get_public_key()
+    )
+
     return {
         "registry_id": registry_id,
         "valid": valid,
-        "public_key": receipt_generator.get_public_key(),
+        "public_key": signing_key or receipt_generator.get_public_key(),
+        "kid": receipt_kid,
         "algorithm": "Ed25519-SHA256",
     }
 
@@ -1420,6 +1450,91 @@ def list_ledger_checkpoints(limit: int = Query(50, ge=1, le=200)) -> dict[str, A
     return {"count": len(checkpoints), "checkpoints": checkpoints}
 
 
+class RotateKeyRequest(BaseModel):
+    new_signing_key: Optional[str] = Field(
+        default=None,
+        description=(
+            "Seed material for the new Ed25519 key. If omitted, a random "
+            "key is generated and returned ONCE in the response."
+        ),
+    )
+
+
+@app.post("/v1/ledger/keys/rotate")
+def rotate_receipt_key(
+    request: RotateKeyRequest,
+    user: User = Depends(require_platform_admin),
+) -> dict[str, Any]:
+    """C3: rotate the receipt signing key.
+
+    The new key is declared in the chain in a record signed by the
+    CURRENT (still-active) key, so the chain of trust is unbroken and a
+    verifier can reconstruct the kid→key table from the ledger alone.
+    Old receipts stay verifiable via their kid. Platform admin only.
+
+    If ``new_signing_key`` is omitted, a random key is generated; its
+    seed is returned once — store it as the new RECEIPT_SIGNING_KEY.
+    """
+    global receipt_generator
+
+    import secrets as _secrets
+
+    new_material = request.new_signing_key or _secrets.token_hex(32)
+    old_generator = receipt_generator
+    new_generator = ReceiptGenerator(new_material)
+
+    if new_generator.kid == old_generator.kid:
+        raise HTTPException(status_code=409, detail="New key is identical to the current key")
+
+    # Если текущий ключ ещё не объявлен в этом реестре (реестр создан после
+    # старта), сначала пишем генезис-декларацию — иначе цепочка доверия
+    # начнётся с подписанта, которого нет в цепи
+    if receipt_registry.resolve_key(old_generator.kid) is None:
+        receipt_registry.register_key_declaration(
+            kid=old_generator.kid,
+            public_key=old_generator.get_public_key(),
+            generator=old_generator,
+        )
+
+    # Декларация нового ключа, подписанная СТАРЫМ активным ключом
+    declaration_id = receipt_registry.register_key_declaration(
+        kid=new_generator.kid,
+        public_key=new_generator.get_public_key(),
+        generator=old_generator,
+    )
+
+    # Переключаем активный генератор и пополняем keyring
+    receipt_generator = new_generator
+    receipt_keyring.add_key(new_generator.kid, new_generator.get_public_key())
+
+    return {
+        "declaration_registry_id": declaration_id,
+        "old_kid": old_generator.kid,
+        "new_kid": new_generator.kid,
+        "new_public_key": new_generator.get_public_key(),
+        # Секрет возвращается один раз — только если сгенерирован сервером
+        "new_signing_key": new_material if not request.new_signing_key else None,
+        "warning": (
+            "Store new_signing_key as RECEIPT_SIGNING_KEY now — it is not "
+            "shown again."
+            if not request.new_signing_key
+            else None
+        ),
+    }
+
+
+@app.get("/v1/ledger/keys")
+def list_key_declarations() -> dict[str, Any]:
+    """C3: all key declarations from the chain (kid → public key history)."""
+    declarations = receipt_registry.key_declarations()
+
+    return {
+        "count": len(declarations),
+        "active_kid": receipt_generator.kid,
+        "declarations": declarations,
+    }
+
+
 # === Public Attestations ===
 
 ATTESTATION_SCHEMA_VERSION = "1"
@@ -1433,7 +1548,7 @@ def _build_attestation(registry_id: str) -> dict[str, Any]:
     if entry is None:
         raise HTTPException(status_code=404, detail=f"Attestation not found: {registry_id}")
 
-    receipt_valid = receipt_registry.verify_stored(registry_id, receipt_verifier)
+    receipt_valid = receipt_registry.verify_stored(registry_id, receipt_keyring)
     chain = receipt_registry.verify_chain()
     metadata = entry.get("metadata", {})
 
@@ -1453,6 +1568,17 @@ def _build_attestation(registry_id: str) -> dict[str, Any]:
             "metric": metadata.get("metric"),
         }
 
+    # C3: issuer несёт тот ключ, которым подписана именно эта квитанция
+    # (разрешается по kid из деклараций цепочки), а не текущий активный —
+    # иначе после ротации старые аттестации не прошли бы независимую проверку.
+    receipt_dict = entry.get("receipt") or {}
+    receipt_kid = receipt_dict.get("kid")
+    issuer_key = (
+        receipt_registry.resolve_key(receipt_kid)
+        if receipt_kid
+        else receipt_generator.get_public_key()
+    ) or receipt_generator.get_public_key()
+
     return {
         "schema_version": ATTESTATION_SCHEMA_VERSION,
         "spec": ATTESTATION_SPEC,
@@ -1460,7 +1586,8 @@ def _build_attestation(registry_id: str) -> dict[str, Any]:
         "issued_at": entry.get("registered_at"),
         "issuer": {
             "name": "SIA Sentinel",
-            "public_key": receipt_generator.get_public_key(),
+            "public_key": issuer_key,
+            "kid": receipt_kid,
             "algorithm": "Ed25519-SHA256",
         },
         "subject": {

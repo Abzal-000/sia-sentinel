@@ -28,6 +28,7 @@
       "properties": {
         "name": { "type": "string" },
         "public_key": { "type": "string" },
+        "kid": { "type": ["string", "null"], "pattern": "^[0-9a-f]{0,64}$" },
         "algorithm": { "const": "Ed25519-SHA256" }
       }
     },
@@ -96,7 +97,8 @@
         "timestamp": { "type": "number" },
         "nonce": { "type": "string" },
         "signature": { "type": "string" },
-        "manifest": { "type": ["object", "null"] }
+        "manifest": { "type": ["object", "null"] },
+        "kid": { "type": ["string", "null"], "pattern": "^[0-9a-f]{0,64}$" }
       }
     },
     "verification": {
