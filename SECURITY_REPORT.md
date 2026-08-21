@@ -1,0 +1,136 @@
+# SIA Sentinel — Security Report & Threat Model
+
+**Last updated:** 2026-08-20
+**Scope:** Sentinel API (`sentinel/`), audit engine (`sia/`), SDK (`sdk/`), deployment configs.
+
+This document replaces the earlier auto-generated test summary. The product's
+core claim — *"an independently verifiable receipt that does not require
+trusting the auditor"* — makes the signing path itself the primary attack
+surface, so this report is written around that threat model.
+
+---
+
+## 1. Threat Model
+
+### 1.1 Assets
+
+| Asset | Why it matters |
+|---|---|
+| Receipt signing key (`RECEIPT_SIGNING_KEY`) | Whoever holds it can forge savings receipts — the entire product's trust anchor |
+| Evidence signing key (`EVIDENCE_SIGNING_KEY`) | Authenticity of stored evidence records |
+| JWT secret (`JWT_SECRET_KEY`) | Session forgery → full API access |
+| API keys store (`api_keys.json`) | Tenant authentication and authorization |
+| TrustChain ledger (`receipts/registry.jsonl`) | Tamper-evident audit history; integrity is the product |
+| Tenant data (usage, billing, settings) | Confidentiality and correct metering |
+
+### 1.2 Trust boundaries
+
+1. **API client → Sentinel.** Untrusted input. The API must never execute
+   client-supplied code or read client-supplied file paths.
+2. **CLI user → audit engine.** Trusted local input. `kind=code` audits run
+   the user's own code in the user's own process — this is a feature, not a
+   vulnerability, and is why code execution exists only behind the CLI.
+3. **GitHub → webhook endpoint.** Authenticated only via HMAC signature;
+   must fail closed when no secret is configured.
+4. **Third-party verifier → published receipts.** Holds only the public key;
+   must be able to detect any tampering, including receipt_id substitution.
+
+### 1.3 Principal threats
+
+| # | Threat | Mitigation |
+|---|---|---|
+| T1 | Remote code execution via audit API | `kind=code` rejected by API (`validate_api_flow`); code audits are CLI-only |
+| T2 | Arbitrary file read via `*_file` flow keys | `*_file` keys rejected by API; CLI paths confined with `_safe_join` (resolve + `is_relative_to`) |
+| T3 | Signing-key theft / receipt forgery | Strict public-key loading (no seed fallback); signing key only in env/HSM, never in responses |
+| T4 | Receipt replay / substitution | `receipt_id` is covered by the Ed25519 commitment |
+| T5 | Anonymous access to mutating endpoints | All mutating endpoints gated by `require_role`; platform ops by `require_platform_admin` |
+| T6 | Webhook forgery | HMAC-SHA256 verification, fail-closed without a secret |
+| T7 | Ledger corruption (multi-process) | `threading.Lock` + cross-process file lock around read-head/append; documented single-writer model |
+| T8 | API-key store corruption | Atomic write (tmp file + `os.replace`), throttled `last_used` flush |
+| T9 | Hung benchmark blocks auditor | Benchmark runs in a child process killed on timeout |
+| T10 | Statistical overstatement of savings | Wilson CI counts tests, not repetitions; reported confidence level is the level actually used |
+
+---
+
+## 2. Audit Findings and Remediation Status
+
+An external security audit (2026-08-20) identified the findings below. All
+BLOCKER and HIGH findings are fixed; each fix is covered by regression tests.
+
+### BLOCKER — fixed
+
+| ID | Finding | Fix | Tests |
+|---|---|---|---|
+| B1 | RCE: `POST /v1/audit` with `kind=code` executed client code via `exec()` in the server process | `validate_api_flow()` rejects `kind=code` at the API layer; code audits remain CLI-only (trusted local input) | `test_audit_code_flow_rejected_via_api` |
+| B2 | Auth bypass: `/v1/verify-change`, `/v1/risk-score`, `/v1/network/*` mutating endpoints accepted anonymous requests | All gated with `require_role(ADMIN, USER)`; quota metering applied per tenant | `test_gated_endpoints_reject_anonymous` |
+| B3 | Path traversal: `*_file` flow keys joined with `os.path.join`, allowing absolute paths (`/etc/passwd`) | `*_file` keys banned in API; CLI uses `_safe_join` (resolve + containment check) | `test_audit_file_keys_rejected_via_api` |
+| B4 | Statistical: (a) repetitions counted as independent trials, inflating Wilson CI; (b) `confidence_level` reported the requested level, not the one actually used | (a) CI built over test count; a test passes only if all repetitions pass. (b) `resolve_confidence()` reports the effective level | `test_repetitions_do_not_inflate_trials`, `test_confidence_level_reports_effective_level` |
+
+### HIGH — fixed
+
+| ID | Finding | Fix | Tests |
+|---|---|---|---|
+| H1 | `receipt_id` not covered by the signature → signature replay across receipts | `receipt_id` added to the signed commitment | `test_receipt_id_covered_by_signature` |
+| H2 | `_load_public_key` silently derived a keypair from arbitrary seed material → a signing secret passed as "public key" was accepted | Strict loader: only base64 raw 32-byte public keys; anything else raises `ValueError` | `test_verifier_rejects_seed_material` |
+| H3 | API-key store rewritten (truncate + write, no lock) on every request | Atomic write via tmp file + `os.replace`; `threading.Lock`; `last_used` flushed at most once per 60 s | auth test suite |
+| H4 | Webhook signature check returned `True` when no secret was configured (fail-open) | Fail-closed: missing secret → reject | webhook handler |
+| H5 | Benchmark timeout raised but the worker process kept running; `shutdown(wait=True)` joined the hung process | Benchmark runs in a managed `multiprocessing.Process`; on timeout it is terminated/killed, never joined indefinitely | `test_measure_time_kills_hung_worker` |
+| H6 | Receipt registry used only `threading.Lock` — multiple processes on one directory could corrupt the chain | Cross-process file lock around read-head/append; single-writer model documented in the module docstring | receipt registry suite |
+
+### Known residual items (MEDIUM/LOW)
+
+- **API key hashing** uses salted-at-rest SHA-256 without per-key salt; production deployments should front this with a database using bcrypt/argon2.
+- **Demo login** (`ENABLE_DEMO_LOGIN=1`) uses fixed credentials; it is disabled by default and must never be enabled in production.
+- **Rate limiting** is in-memory per process; use Redis-backed limiting for multi-instance deployments.
+- **JWT** does not yet validate `iss`/`aud` claims (single-issuer deployment assumed).
+- **Secret rotation:** any signing keys used before the H2 fix should be rotated, since the old fallback could have accepted secret material in place of a public key.
+
+---
+
+## 3. Security Controls
+
+### Input validation
+- `kind=code` and `*_file` keys rejected at the API boundary (`validate_api_flow`)
+- CLI file access confined to the flow's base directory (`_safe_join`)
+- XSS/SQLi pattern detection, length limits, null-byte sanitization on free-text fields
+
+### Authentication & authorization
+- JWT (HS256, 24 h expiry) + API-key authentication
+- RBAC: `ADMIN` / `VERIFIER` / `USER` / `ANONYMOUS`
+- Platform-admin split: tenant admins cannot touch other tenants or platform ops
+- Constant-time key comparison (`hmac.compare_digest`)
+
+### Cryptography
+- Ed25519 receipts; `receipt_id` + manifest covered by the signature
+- TrustChain: append-only JSONL hash chain + signed checkpoints
+- HMAC-SHA256 outbound webhook signatures; GitHub webhook HMAC verification (fail-closed)
+- Public key published at `/v1/receipt-public-key`; verification requires no secret
+
+### Availability
+- Persistent job queue with crash recovery
+- Benchmark isolation in a killable child process
+- Atomic persistence for keys/registry state
+
+---
+
+## 4. Production Deployment Checklist
+
+1. Set strong, unique values for `JWT_SECRET_KEY`, `RECEIPT_SIGNING_KEY`,
+   `EVIDENCE_SIGNING_KEY`, `GITHUB_WEBHOOK_SECRET`, `POSTGRES_PASSWORD`
+   (docker-compose.prod.yml marks all of these as required).
+2. Do **not** set `ENABLE_DEMO_LOGIN`.
+3. Terminate TLS in front of the API.
+4. Rotate any signing keys that predate the H2 fix.
+5. Keep `credentials/`, `identities/`, `.env` out of version control and images
+   (enforced by `.gitignore` and `.dockerignore`).
+6. Single writer per receipt ledger directory; move to a database before
+   scaling writes horizontally.
+
+---
+
+## 5. Verification
+
+- Full test suite: `python -m unittest discover -s tests` (see `artifacts/security_test_report.md` for the auto-generated security-test breakdown).
+- Penetration suite: `python -m unittest tests.security.test_penetration -v`.
+- Independent receipt verification is exercised end-to-end in
+  `tests/test_cryptographic_receipts.py` and `tests/test_receipt_registry.py`.

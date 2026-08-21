@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sia-verifier"
+version = "1.0.0"
+description = "Independent verifier for sia-attestation/1 Proof-of-Savings attestations — no trust in the auditor required"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { file = "LICENSE" }
+authors = [{ name = "SIA Sentinel contributors" }]
+keywords = ["ai", "finops", "attestation", "ed25519", "verification"]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Security :: Cryptography",
+]
+# Единственная зависимость — криптография. Никаких сетевых вызовов,
+# никакого SDK Sentinel: верификатор должен работать у любой третьей
+# стороны, которая не доверяет аудитору.
+dependencies = ["cryptography>=41.0"]
+
+[project.scripts]
+sia-verifier = "sia_verifier.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/sia-sentinel/sia-sentinel"
+
+[tool.setuptools.packages.find]
+include = ["sia_verifier*"]

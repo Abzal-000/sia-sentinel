@@ -1,0 +1,54 @@
+# Keep the Docker build context small and secret-free.
+
+# VCS and tooling
+.git
+.gitignore
+.github
+.zcode
+.pytest_cache
+.ruff_cache
+.mypy_cache
+__pycache__
+*.py[cod]
+
+# Environments
+venv
+.venv
+ENV
+
+# Secrets and local state — must never enter an image
+.env
+.env.*
+credentials
+demo_credentials
+identities
+demo_identities
+api_keys.json
+tenants.json
+usage_events.jsonl
+invoices.json
+webhooks.json
+sentinel.db
+*.db
+*.sqlite*
+receipts
+logs
+evidence
+
+# Generated artifacts and docs
+artifacts
+docs
+*.md
+!README.md
+
+# Tests and examples
+tests
+examples
+scripts
+benchmark_report.json
+
+# Docker files themselves
+Dockerfile
+docker-compose*.yml
+.dockerignore
+docker

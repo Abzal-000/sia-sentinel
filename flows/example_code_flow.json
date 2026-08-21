@@ -1,0 +1,20 @@
+{
+  "kind": "code",
+  "name": "fib-recursive-to-iterative",
+  "function_name": "fib",
+  "old_code": "def fib(n):\n    if n <= 1:\n        return n\n    return fib(n - 1) + fib(n - 2)\n",
+  "new_code": "def fib(n):\n    a, b = 0, 1\n    for _ in range(n):\n        a, b = b, a + b\n    return a\n",
+  "test_suite": [
+    "assert fib(0) == 0",
+    "assert fib(1) == 1",
+    "assert fib(5) == 5",
+    "assert fib(10) == 55",
+    "assert fib(20) == 6765"
+  ],
+  "args_template": [20],
+  "pricing": {
+    "compute_usd_per_hour": 3.6
+  },
+  "repetitions": 2,
+  "seeds": [42, 1337]
+}

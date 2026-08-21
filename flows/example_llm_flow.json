@@ -1,0 +1,36 @@
+{
+  "kind": "llm_flow",
+  "name": "support-router-premium-to-small",
+  "mode": "simulated",
+  "dataset": [
+    {
+      "label": "sum-question",
+      "prompt": "What is 2+2? Answer with the number only.",
+      "expect_contains": "4"
+    },
+    {
+      "label": "capital-question",
+      "prompt": "What is the capital of France? One word.",
+      "expect_contains": "Paris"
+    },
+    {
+      "label": "color-question",
+      "prompt": "What color do you get mixing blue and yellow? One word.",
+      "expect_contains": "green"
+    }
+  ],
+  "old": {
+    "model_name": "premium-model-70b",
+    "profile": "verbose",
+    "input_token_usd_per_m": 3.0,
+    "output_token_usd_per_m": 15.0
+  },
+  "new": {
+    "model_name": "small-model-8b",
+    "profile": "concise",
+    "input_token_usd_per_m": 0.1,
+    "output_token_usd_per_m": 0.4
+  },
+  "repetitions": 3,
+  "confidence": 0.95
+}

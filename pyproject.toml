@@ -1,0 +1,61 @@
+[project]
+name = "sia-sentinel"
+version = "0.6.0"
+description = "Proof-of-Savings: neutral AI efficiency auditor with cryptographically verifiable savings receipts"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "SIA Sentinel contributors" }]
+keywords = ["ai", "finops", "llm", "cost-optimization", "audit", "attestation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Software Development :: Quality Assurance",
+]
+
+# Runtime dependencies are pinned in requirements.txt (single source of
+# truth for Docker builds). Keep this list in sync when upgrading.
+dependencies = [
+    "fastapi>=0.141",
+    "uvicorn>=0.52",
+    "pydantic>=2.13",
+    "SQLAlchemy>=2.0",
+    "alembic>=1.19",
+    "cryptography>=50.0",
+    "PyJWT>=2.13",
+    "httpx>=0.28",
+    "openai>=3.0",
+    "anthropic>=0.121",
+    "jsonschema>=4.26",
+    "PyYAML>=6.0",
+    "requests>=2.34",
+    "rich>=15.0",
+    "streamlit>=1.61",
+    "docker>=7.2",
+    "bandit>=1.9",
+    "redis>=8.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.10",
+]
+
+[project.urls]
+Homepage = "https://github.com/sia-sentinel/sia-sentinel"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = ["venv", "examples", "scripts/oneoff", "artifacts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true

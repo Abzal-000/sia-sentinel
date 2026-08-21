@@ -1,0 +1,93 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sia.dev/schemas/attestation.schema.json",
+  "title": "SIA Proof-of-Savings Attestation",
+  "description": "Portable, independently verifiable attestation document (spec sia-attestation/1). See docs/attestation-spec.md.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "spec",
+    "attestation_id",
+    "issued_at",
+    "issuer",
+    "subject",
+    "claim",
+    "receipt",
+    "verification"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": "1" },
+    "spec": { "const": "sia-attestation/1" },
+    "attestation_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
+    "issued_at": { "type": ["string", "null"] },
+    "issuer": {
+      "type": "object",
+      "required": ["name", "public_key", "algorithm"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "public_key": { "type": "string" },
+        "algorithm": { "const": "Ed25519-SHA256" }
+      }
+    },
+    "subject": {
+      "type": "object",
+      "required": ["flow_name", "kind", "mode"],
+      "additionalProperties": false,
+      "properties": {
+        "flow_name": { "type": ["string", "null"] },
+        "kind": { "type": ["string", "null"] },
+        "mode": { "type": ["string", "null"] }
+      }
+    },
+    "claim": {
+      "type": "object",
+      "required": ["savings_verified", "savings_ratio"],
+      "additionalProperties": false,
+      "properties": {
+        "savings_verified": { "type": ["boolean", "null"] },
+        "savings_ratio": { "type": ["number", "null"] }
+      }
+    },
+    "receipt": {
+      "type": "object",
+      "required": [
+        "receipt_id",
+        "evidence_id",
+        "code_hash",
+        "safety_approved",
+        "trust_level",
+        "timestamp",
+        "nonce",
+        "signature"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "receipt_id": { "type": "string" },
+        "evidence_id": { "type": "string" },
+        "code_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "safety_approved": { "type": "boolean" },
+        "trust_level": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "nonce": { "type": "string" },
+        "signature": { "type": "string" },
+        "manifest": { "type": ["object", "null"] }
+      }
+    },
+    "verification": {
+      "type": "object",
+      "required": [
+        "receipt_signature_valid",
+        "ledger_chain_valid",
+        "ledger_entries"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "receipt_signature_valid": { "type": ["boolean", "null"] },
+        "ledger_chain_valid": { "type": "boolean" },
+        "ledger_entries": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

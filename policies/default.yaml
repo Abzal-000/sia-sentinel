@@ -1,0 +1,54 @@
+﻿name: default
+description: Default security and risk policy for all agents
+applies_to:
+  - "*"
+priority: 100
+
+rules:
+  - name: block_os_import
+    condition: "proposed_code contains 'import os'"
+    action: block
+    risk_score_delta: 50
+    description: "Direct OS import is prohibited"
+
+  - name: block_os_system_call
+    condition: "proposed_code contains 'os.system'"
+    action: block
+    risk_score_delta: 80
+    description: "os.system() calls are prohibited"
+
+  - name: block_subprocess
+    condition: "proposed_code contains 'subprocess'"
+    action: block
+    risk_score_delta: 70
+    description: "subprocess module usage is prohibited"
+
+  - name: block_eval_exec
+    condition: "proposed_code matches '(eval|exec|compile)\\s*\\('"
+    action: block
+    risk_score_delta: 90
+    description: "Dynamic code execution is prohibited"
+
+  - name: large_change_warning
+    condition: "code_diff_length > 500"
+    action: warning
+    risk_score_delta: 20
+    description: "Large code change detected"
+
+  - name: very_large_change_review
+    condition: "code_diff_length > 2000"
+    action: require_human
+    risk_score_delta: 40
+    description: "Very large change requires human review"
+
+  - name: production_path_review
+    condition: "target_path contains 'production'"
+    action: require_human
+    risk_score_delta: 30
+    description: "Production code changes require review"
+
+  - name: auth_code_review
+    condition: "target_path matches '(auth|login|password|secret)'"
+    action: require_human
+    risk_score_delta: 50
+    description: "Authentication code changes require review"

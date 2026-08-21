@@ -1,0 +1,26 @@
+{
+  "kind": "optimize",
+  "name": "live-optimize-nim",
+  "dataset": [
+    {"label": "sum", "prompt": "What is 2+2? Answer with the number only.", "expect_contains": "4"},
+    {"label": "capital", "prompt": "What is the capital of France? One word.", "expect_contains": "Paris"},
+    {"label": "element", "prompt": "What is the chemical symbol for gold? One word.", "expect_contains": "Au"},
+    {"label": "year", "prompt": "In which year did the first iPhone launch? Answer with the year only.", "expect_contains": "2007"},
+    {"label": "language", "prompt": "What language is primarily spoken in Brazil? One word.", "expect_contains": "Portuguese"},
+    {"label": "planet", "prompt": "Which planet is known as the Red Planet? One word.", "expect_contains": "Mars"}
+  ],
+  "baseline": {
+    "model_name": "meta/llama-3.3-70b-instruct",
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "api_key_env": "NVIDIA_API_KEY",
+    "input_token_usd_per_m": 0.88,
+    "output_token_usd_per_m": 2.64
+  },
+  "catalog_file": "model_catalog.json",
+  "tiers": ["mid", "economy"],
+  "quality_floor": 0.9,
+  "confidence": 0.95,
+  "screening_fraction": 0.5,
+  "final_repetitions": 1,
+  "max_finalists": 3
+}

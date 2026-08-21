@@ -1,0 +1,341 @@
+"""HTTP-клиент Sentinel API на httpx.
+
+Все методы возвращают распарсенный JSON; ошибки API (4xx/5xx) поднимаются
+как SentinelAPIError с кодом статуса и текстом ошибки. Для тестов клиент
+принимает кастомный httpx-транспорт (например, httpx.MockTransport).
+"""
+from __future__ import annotations
+
+import time
+from typing import Any, Optional
+
+import httpx
+
+_TERMINAL_STATUSES = ("completed", "failed")
+
+
+class SentinelAPIError(Exception):
+    """Ошибка API Sentinel: HTTP-статус + detail из тела ответа."""
+
+    def __init__(self, status_code: int, detail: str, body: Any = None):
+        super().__init__(f"HTTP {status_code}: {detail}")
+        self.status_code = status_code
+        self.detail = detail
+        self.body = body
+
+
+class SentinelClient:
+    """Клиент Sentinel: аудиты, оптимизации, квитанции, биллинг.
+
+    Аутентификация: api_key (X-API-Key) или token (Bearer JWT).
+    """
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: Optional[str] = None,
+        token: Optional[str] = None,
+        timeout: float = 30.0,
+        transport: Optional[httpx.BaseTransport] = None,
+    ):
+        headers: dict[str, str] = {}
+
+        if api_key:
+            headers["X-API-Key"] = api_key
+
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+
+        self._http = httpx.Client(
+            base_url=base_url.rstrip("/"),
+            headers=headers,
+            timeout=timeout,
+            transport=transport,
+        )
+
+    @classmethod
+    def login(
+        cls,
+        base_url: str,
+        username: str,
+        password: str,
+        timeout: float = 30.0,
+        transport: Optional[httpx.BaseTransport] = None,
+    ) -> "SentinelClient":
+        """Логин по username/password; возвращает клиент с JWT-токеном."""
+        with httpx.Client(
+            base_url=base_url.rstrip("/"), timeout=timeout, transport=transport
+        ) as http:
+            response = http.post(
+                "/v1/auth/login", json={"username": username, "password": password}
+            )
+
+        if response.status_code >= 400:
+            raise _api_error(response)
+
+        return cls(base_url, token=response.json()["access_token"], timeout=timeout)
+
+    @classmethod
+    def signup(
+        cls,
+        base_url: str,
+        name: str,
+        tenant_id: Optional[str] = None,
+        timeout: float = 30.0,
+        transport: Optional[httpx.BaseTransport] = None,
+    ) -> "SentinelClient":
+        """Self-service регистрация: создаёт тенант и возвращает клиент с первым ключом.
+
+        Тенант создаётся на free-плане; ключ имеет роль admin своего тенанта.
+        """
+        payload: dict[str, Any] = {"name": name}
+
+        if tenant_id:
+            payload["tenant_id"] = tenant_id
+
+        with httpx.Client(
+            base_url=base_url.rstrip("/"), timeout=timeout, transport=transport
+        ) as http:
+            response = http.post("/v1/signup", json=payload)
+
+        if response.status_code >= 400:
+            raise _api_error(response)
+
+        return cls(base_url, api_key=response.json()["api_key"], timeout=timeout)
+
+    # === Аудиты Proof-of-Savings ===
+
+    def run_audit(self, flow: dict[str, Any]) -> dict[str, Any]:
+        """Синхронный аудит: POST /v1/audit -> {registry_id, report, receipt}."""
+        return self._post("/v1/audit", json={"flow": flow})
+
+    def submit_audit(self, flow: dict[str, Any]) -> str:
+        """Асинхронный аудит: POST /v1/audits -> audit_id."""
+        return self._post("/v1/audits", json={"flow": flow})["audit_id"]
+
+    def get_audit(self, audit_id: str) -> dict[str, Any]:
+        """Статус асинхронного аудита: GET /v1/audits/{id}."""
+        return self._get(f"/v1/audits/{audit_id}")
+
+    def wait_for_audit(
+        self, audit_id: str, timeout: float = 600.0, poll_interval: float = 1.0
+    ) -> dict[str, Any]:
+        """Опрашивает аудит до завершения; при failed бросает SentinelAPIError."""
+        return self._wait_terminal(
+            lambda: self.get_audit(audit_id), timeout, poll_interval
+        )
+
+    # === Savings Autopilot ===
+
+    def submit_optimization(self, flow: dict[str, Any]) -> str:
+        """Запуск оптимизации: POST /v1/optimize -> audit_id."""
+        return self._post("/v1/optimize", json={"flow": flow})["audit_id"]
+
+    def get_optimization(self, audit_id: str) -> dict[str, Any]:
+        """Статус оптимизации: GET /v1/optimize/{id}."""
+        return self._get(f"/v1/optimize/{audit_id}")
+
+    def wait_for_optimization(
+        self, audit_id: str, timeout: float = 1800.0, poll_interval: float = 2.0
+    ) -> dict[str, Any]:
+        """Опрашивает оптимизацию до завершения."""
+        return self._wait_terminal(
+            lambda: self.get_optimization(audit_id), timeout, poll_interval
+        )
+
+    # === Квитанции и TrustChain ===
+
+    def list_receipts(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+        return self._get("/v1/receipts", params={"limit": limit, "offset": offset})
+
+    def get_receipt(self, registry_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/receipts/{registry_id}")
+
+    def ledger_head(self) -> dict[str, Any]:
+        return self._get("/v1/ledger/head")
+
+    def verify_ledger(self) -> dict[str, Any]:
+        return self._get("/v1/ledger/verify")
+
+    def get_attestation(self, registry_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/attestations/{registry_id}")
+
+    def verify_attestation(self, registry_id: str) -> dict[str, Any]:
+        """Machine-readable verdict: signature + chain check for one entry.
+
+        Это вердикт СЕРВЕРА. Для проверки без доверия к аудитору
+        используйте verify_attestation_independent().
+        """
+        return self._get(f"/v1/receipts/{registry_id}/verify")
+
+    def verify_attestation_independent(self, registry_id: str) -> dict[str, Any]:
+        """Независимая верификация аттестации локально (без доверия к аудитору).
+
+        Скачивает аттестационный документ и проверяет Ed25519-подпись
+        квитанции и согласованность заявления локально через пакет
+        ``sia-verifier`` — тот же, что используют третьи стороны.
+        Поля verification.* сервера игнорируются.
+
+        Требует установленный sia-verifier: pip install sia-verifier.
+        """
+        try:
+            from sia_verifier import verify_attestation
+        except ImportError as exc:
+            raise RuntimeError(
+                "Independent verification requires the sia-verifier package: "
+                "pip install sia-verifier"
+            ) from exc
+
+        attestation = self.get_attestation(registry_id)
+        return verify_attestation(attestation).to_dict()
+
+    def list_public_attestations(
+        self, limit: int = 50, offset: int = 0
+    ) -> dict[str, Any]:
+        """Public attestation registry (only opted-in tenants)."""
+        return self._get(
+            "/v1/attestations", params={"limit": limit, "offset": offset}
+        )
+
+    # === Webhooks ===
+
+    def subscribe_webhook(self, url: str, events: list[str]) -> dict[str, Any]:
+        """Subscribe a URL to audit events; returns subscription with secret (shown once)."""
+        return self._post(
+            "/v1/webhooks/subscriptions", json={"url": url, "events": events}
+        )
+
+    def list_webhooks(self) -> dict[str, Any]:
+        return self._get("/v1/webhooks/subscriptions")
+
+    def unsubscribe_webhook(self, subscription_id: str) -> dict[str, Any]:
+        return self._delete(f"/v1/webhooks/subscriptions/{subscription_id}")
+
+    # === Управление ключами тенанта ===
+
+    def create_tenant_key(
+        self,
+        tenant_id: str,
+        name: str,
+        role: str = "user",
+        expires_in_days: Optional[int] = None,
+    ) -> dict[str, Any]:
+        """Создать ключ тенанта (admin тенанта или платформенный админ)."""
+        payload: dict[str, Any] = {"name": name, "role": role}
+
+        if expires_in_days is not None:
+            payload["expires_in_days"] = expires_in_days
+
+        return self._post(f"/v1/tenants/{tenant_id}/api-keys", json=payload)
+
+    def list_tenant_keys(self, tenant_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/tenants/{tenant_id}/api-keys")
+
+    def revoke_tenant_key(self, tenant_id: str, key_id: str) -> dict[str, Any]:
+        return self._delete(f"/v1/tenants/{tenant_id}/api-keys/{key_id}")
+
+    # === Использование и биллинг ===
+
+    def usage(self) -> dict[str, Any]:
+        """Сводка использования тенанта: GET /v1/usage."""
+        return self._get("/v1/usage")
+
+    def plans(self) -> dict[str, Any]:
+        """Каталог тарифов: GET /v1/billing/plans (публичный)."""
+        return self._get("/v1/billing/plans")
+
+    def get_plan(self) -> dict[str, Any]:
+        """Текущий план и квоты тенанта: GET /v1/billing/plan."""
+        return self._get("/v1/billing/plan")
+
+    def set_plan(self, plan: str) -> dict[str, Any]:
+        """Смена плана (admin): POST /v1/billing/plan."""
+        return self._post("/v1/billing/plan", json={"plan": plan})
+
+    def list_invoices(self) -> dict[str, Any]:
+        return self._get("/v1/billing/invoices")
+
+    def issue_invoice(self, period: Optional[str] = None) -> dict[str, Any]:
+        """Выставить инвойс за период (admin): POST /v1/billing/invoices."""
+        payload: dict[str, Any] = {}
+
+        if period:
+            payload["period"] = period
+
+        return self._post("/v1/billing/invoices", json=payload)
+
+    def get_invoice(self, invoice_id: str) -> dict[str, Any]:
+        return self._get(f"/v1/billing/invoices/{invoice_id}")
+
+    # === Служебное ===
+
+    def health(self) -> dict[str, Any]:
+        return self._get("/health")
+
+    def close(self) -> None:
+        try:
+            self._http.close()
+        except AttributeError:
+            # Не все транспорты реализуют close (например, ASGITransport в тестах)
+            pass
+
+    def __enter__(self) -> "SentinelClient":
+        return self
+
+    def __exit__(self, *exc_info: Any) -> None:
+        self.close()
+
+    # === Внутреннее ===
+
+    def _get(self, path: str, params: Optional[dict[str, Any]] = None) -> Any:
+        response = self._http.get(path, params=params)
+        return self._unwrap(response)
+
+    def _post(self, path: str, json: dict[str, Any]) -> Any:
+        response = self._http.post(path, json=json)
+        return self._unwrap(response)
+
+    def _delete(self, path: str) -> Any:
+        response = self._http.delete(path)
+        return self._unwrap(response)
+
+    @staticmethod
+    def _unwrap(response: httpx.Response) -> Any:
+        if response.status_code >= 400:
+            raise _api_error(response)
+
+        return response.json()
+
+    @staticmethod
+    def _wait_terminal(fetch, timeout: float, poll_interval: float) -> dict[str, Any]:
+        deadline = time.monotonic() + timeout
+
+        while True:
+            snapshot = fetch()
+
+            if snapshot.get("status") in _TERMINAL_STATUSES:
+                if snapshot["status"] == "failed":
+                    raise SentinelAPIError(
+                        500, snapshot.get("error", "job failed"), snapshot
+                    )
+
+                return snapshot
+
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Job did not finish within {timeout}s "
+                    f"(last status: {snapshot.get('status')})"
+                )
+
+            time.sleep(poll_interval)
+
+
+def _api_error(response: httpx.Response) -> SentinelAPIError:
+    try:
+        body = response.json()
+        detail = body.get("detail", response.text)
+    except ValueError:
+        body = response.text
+        detail = response.text
+
+    return SentinelAPIError(response.status_code, str(detail), body)

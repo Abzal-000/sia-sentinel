@@ -1,0 +1,210 @@
+"""Тесты предрегистрации: обязательство аудита коммитится в цепочку ДО прогона."""
+from __future__ import annotations
+
+import os
+import tempfile
+import unittest
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+import sentinel.api as api_module
+from sentinel.api import app, rate_limiter
+from sentinel.billing import BillingEngine
+from sentinel.outbound_webhooks import OutboundWebhookDispatcher
+from sentinel.receipt_registry import ReceiptRegistry
+from sentinel.tenancy import TenantManager, UsageMeter
+
+LLM_FLOW = {
+    "kind": "llm_flow",
+    "name": "prereg-flow",
+    "dataset": [
+        {"prompt": "What is 2+2?", "expect_contains": "4"},
+        {"prompt": "Capital of France?", "expect_contains": "Paris"},
+    ],
+    "old": {"model_name": "premium", "profile": "verbose",
+            "input_token_usd_per_m": 3.0, "output_token_usd_per_m": 15.0},
+    "new": {"model_name": "small", "profile": "concise",
+            "input_token_usd_per_m": 0.1, "output_token_usd_per_m": 0.4},
+    "delta": 0.10,
+    "repetitions": 1,
+}
+
+
+class PreregistrationAPITestCase(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        rate_limiter.reset()
+
+        self._original_demo_login = os.environ.get("ENABLE_DEMO_LOGIN")
+        os.environ["ENABLE_DEMO_LOGIN"] = "1"
+
+        self._original_registry = api_module.receipt_registry
+        api_module.receipt_registry = ReceiptRegistry(str(Path(self._tmp.name) / "receipts"))
+
+        self._original_tenants = api_module.tenant_manager
+        api_module.tenant_manager = TenantManager(str(Path(self._tmp.name) / "tenants.json"))
+
+        self._original_usage = api_module.usage_meter
+        api_module.usage_meter = UsageMeter(str(Path(self._tmp.name) / "usage.jsonl"))
+
+        self._original_billing = api_module.billing_engine
+        api_module.billing_engine = BillingEngine(
+            api_module.tenant_manager,
+            api_module.usage_meter,
+            invoices_file=str(Path(self._tmp.name) / "invoices.json"),
+        )
+
+        self._original_webhooks = api_module.webhook_dispatcher
+        api_module.webhook_dispatcher = OutboundWebhookDispatcher(
+            subscriptions_file=str(Path(self._tmp.name) / "webhooks.json")
+        )
+
+        self.client = TestClient(app)
+
+        login = self.client.post(
+            "/v1/auth/login",
+            json={"username": "admin", "password": "admin123"},
+        )
+        self._auth_headers = {
+            "Authorization": f"Bearer {login.json()['access_token']}"
+        }
+
+    def tearDown(self) -> None:
+        api_module.receipt_registry = self._original_registry
+        api_module.tenant_manager = self._original_tenants
+        api_module.usage_meter = self._original_usage
+        api_module.billing_engine = self._original_billing
+        api_module.webhook_dispatcher = self._original_webhooks
+
+        if self._original_demo_login is None:
+            os.environ.pop("ENABLE_DEMO_LOGIN", None)
+        else:
+            os.environ["ENABLE_DEMO_LOGIN"] = self._original_demo_login
+
+        self._tmp.cleanup()
+
+    def test_create_preregistration(self) -> None:
+        response = self.client.post(
+            "/v1/preregistrations", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertIn("preregistration_id", data)
+        commitment = data["commitment"]
+        self.assertEqual(commitment["protocol"], "sia-preregistration/1")
+        self.assertEqual(commitment["delta"], 0.10)
+        self.assertEqual(commitment["metric"], "expect_contains")
+        self.assertEqual(commitment["dataset_size"], 2)
+        self.assertIn("dataset_sha256", commitment)
+
+    def test_preregistration_requires_auth(self) -> None:
+        response = self.client.post("/v1/preregistrations", json={"flow": LLM_FLOW})
+        self.assertEqual(response.status_code, 401)
+
+    def test_get_preregistration(self) -> None:
+        created = self.client.post(
+            "/v1/preregistrations", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        ).json()
+
+        fetched = self.client.get(
+            f"/v1/preregistrations/{created['preregistration_id']}"
+        ).json()
+
+        self.assertEqual(fetched["preregistration_id"], created["preregistration_id"])
+        self.assertEqual(fetched["commitment"]["delta"], 0.10)
+
+    def test_get_missing_preregistration_404(self) -> None:
+        response = self.client.get("/v1/preregistrations/nonexistent")
+        self.assertEqual(response.status_code, 404)
+
+    def test_preregistration_matches_audit(self) -> None:
+        """Полный цикл: предрегистрация -> аудит -> проверка связи."""
+        created = self.client.post(
+            "/v1/preregistrations", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        ).json()
+        prereg_id = created["preregistration_id"]
+
+        audit = self.client.post(
+            "/v1/audit", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        ).json()
+        registry_id = audit["registry_id"]
+
+        link = self.client.get(
+            f"/v1/preregistrations/{prereg_id}/verify/{registry_id}"
+        ).json()
+
+        self.assertTrue(link["valid"], link.get("reason"))
+
+    def test_preregistration_mismatch_detected(self) -> None:
+        """Аудит с другим датасетом не проходит проверку предрегистрации."""
+        created = self.client.post(
+            "/v1/preregistrations", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        ).json()
+        prereg_id = created["preregistration_id"]
+
+        # Аудит с изменённым датасетом
+        tampered_flow = dict(LLM_FLOW)
+        tampered_flow["dataset"] = [
+            {"prompt": "Different question?", "expect_contains": "x"},
+        ]
+        audit = self.client.post(
+            "/v1/audit", json={"flow": tampered_flow}, headers=self._auth_headers
+        ).json()
+        registry_id = audit["registry_id"]
+
+        link = self.client.get(
+            f"/v1/preregistrations/{prereg_id}/verify/{registry_id}"
+        ).json()
+
+        self.assertFalse(link["valid"])
+        self.assertIn("dataset_sha256", link["reason"])
+
+    def test_preregistration_must_precede_receipt(self) -> None:
+        """Предрегистрация ПОСЛЕ аудита не проходит проверку порядка."""
+        audit = self.client.post(
+            "/v1/audit", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        ).json()
+        registry_id = audit["registry_id"]
+
+        created = self.client.post(
+            "/v1/preregistrations", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        ).json()
+        prereg_id = created["preregistration_id"]
+
+        link = self.client.get(
+            f"/v1/preregistrations/{prereg_id}/verify/{registry_id}"
+        ).json()
+
+        self.assertFalse(link["valid"])
+        self.assertIn("precede", link["reason"])
+
+    def test_preregistration_not_in_receipt_listing(self) -> None:
+        """Записи предрегистрации не попадают в список квитанций."""
+        self.client.post(
+            "/v1/preregistrations", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        )
+        self.client.post(
+            "/v1/audit", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        )
+
+        listing = self.client.get("/v1/receipts").json()
+        self.assertEqual(listing["total"], 1)
+
+    def test_chain_valid_with_preregistration(self) -> None:
+        """Хеш-цепочка остаётся валидной с записями предрегистрации."""
+        self.client.post(
+            "/v1/preregistrations", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        )
+        self.client.post(
+            "/v1/audit", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        )
+
+        chain = self.client.get("/v1/ledger/verify").json()
+        self.assertTrue(chain["valid"])
+        self.assertEqual(chain["entries"], 2)
+
+
+if __name__ == "__main__":
+    unittest.main()

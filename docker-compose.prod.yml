@@ -1,0 +1,71 @@
+# Production deployment: Sentinel API + PostgreSQL.
+#
+# Все секреты ОБЯЗАТЕЛЬНЫ и не имеют значений по умолчанию — compose
+# откажется стартовать, пока они не заданы. Перед запуском:
+#
+#   export JWT_SECRET_KEY=$(openssl rand -hex 32)
+#   export RECEIPT_SIGNING_KEY=$(openssl rand -hex 32)
+#   export EVIDENCE_SIGNING_KEY=$(openssl rand -hex 32)
+#   export POSTGRES_PASSWORD=<strong-password>
+#   export NVIDIA_API_KEY=nvapi-...        # только для live-аудитов LLM
+#
+# ENABLE_DEMO_LOGIN по умолчанию пуст (демо-логин выключен). Не включайте
+# его в продакшене.
+
+services:
+  sentinel:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app
+      # --- Обязательные секреты ---
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
+      - RECEIPT_SIGNING_KEY=${RECEIPT_SIGNING_KEY:?RECEIPT_SIGNING_KEY is required}
+      - EVIDENCE_SIGNING_KEY=${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY is required}
+      # --- БД: PostgreSQL вместо dev-SQLite ---
+      - DATABASE_URL=postgresql+psycopg2://siauser:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/sia_sentinel
+      # --- Runtime-данные на постоянном томе ---
+      - API_KEYS_FILE=/app/data/api_keys.json
+      - TENANTS_FILE=/app/data/tenants.json
+      - USAGE_EVENTS_FILE=/app/data/usage_events.jsonl
+      - INVOICES_FILE=/app/data/invoices.json
+      - RECEIPTS_DIR=/app/data/receipts
+      # --- Опционально ---
+      - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
+      - ENABLE_DEMO_LOGIN=${ENABLE_DEMO_LOGIN:-}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - sentinel_data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=sia_sentinel
+      - POSTGRES_USER=siauser
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U siauser -d sia_sentinel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  sentinel_data:
+  postgres_data:
