@@ -149,7 +149,8 @@ class ReceiptChainTestCase(unittest.TestCase):
         entries[1]["receipt"]["safety_approved"] = False
         self._rewrite(entries)
 
-        result = self.registry.verify_chain()
+        # Подмена в уже проверенном префиксе ловится полной проверкой
+        result = self.registry.verify_chain(full=True)
 
         self.assertFalse(result["valid"])
         self.assertEqual(result["broken_at"], 2)
@@ -160,7 +161,7 @@ class ReceiptChainTestCase(unittest.TestCase):
         del entries[0]
         self._rewrite(entries)
 
-        result = self.registry.verify_chain()
+        result = self.registry.verify_chain(full=True)
 
         self.assertFalse(result["valid"])
         self.assertIn("prev_hash mismatch", result["reason"])
@@ -170,7 +171,7 @@ class ReceiptChainTestCase(unittest.TestCase):
         entries[0], entries[1] = entries[1], entries[0]
         self._rewrite(entries)
 
-        result = self.registry.verify_chain()
+        result = self.registry.verify_chain(full=True)
 
         self.assertFalse(result["valid"])
 
@@ -183,7 +184,7 @@ class ReceiptChainTestCase(unittest.TestCase):
             entry.pop("entry_hash", None)
         self._rewrite(entries)
 
-        result = self.registry.verify_chain()
+        result = self.registry.verify_chain(full=True)
 
         self.assertTrue(result["valid"])
         self.assertEqual(result["legacy_entries"], 3)
@@ -311,6 +312,116 @@ class CrashSafetyTestCase(unittest.TestCase):
 
         self.assertEqual(len(checkpoints), 1)
         self.assertEqual(checkpoints[0]["seq"], 1)
+
+
+class IncrementalVerificationTestCase(unittest.TestCase):
+    """C2: инкрементальная верификация цепочки с кешем."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.storage_dir = str(Path(self._tmp.name) / "receipts")
+
+        self.generator = ReceiptGenerator("incremental-test-key")
+        self.registry = ReceiptRegistry(self.storage_dir)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _make_receipt(self, name: str):
+        return self.generator.generate_receipt(
+            evidence_id=f"evidence-{name}",
+            code=f"# code for {name}",
+            safety_approved=True,
+            trust_level="JUNIOR",
+        )
+
+    def test_first_verify_is_full_second_is_incremental(self) -> None:
+        self.registry.register(self._make_receipt("one"))
+
+        first = self.registry.verify_chain()
+        self.assertTrue(first["valid"])
+        self.assertFalse(first["incremental"])  # первый вызов — полный
+
+        self.registry.register(self._make_receipt("two"))
+
+        second = self.registry.verify_chain()
+        self.assertTrue(second["valid"])
+        self.assertTrue(second["incremental"])  # повторный — инкрементальный
+        self.assertEqual(second["entries"], 2)
+
+    def test_incremental_detects_new_corrupt_entry(self) -> None:
+        self.registry.register(self._make_receipt("good"))
+        self.registry.verify_chain()  # прогреваем кеш
+
+        # Новая запись с битым entry_hash ловится инкрементальной проверкой
+        registry_file = Path(self.storage_dir) / "registry.jsonl"
+        lines = registry_file.read_text(encoding="utf-8").splitlines()
+        entry = json.loads(lines[0])
+        entry["seq"] = 2
+        entry["prev_hash"] = entry["entry_hash"]
+        entry["entry_hash"] = "f" * 64
+        lines.append(json.dumps(entry))
+        registry_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = self.registry.verify_chain()
+
+        self.assertFalse(result["valid"])
+        self.assertTrue(result["incremental"])
+        self.assertEqual(result["broken_at"], 2)
+
+    def test_anchor_detects_prefix_tamper_without_full_flag(self) -> None:
+        self.registry.register(self._make_receipt("one"))
+        self.registry.register(self._make_receipt("two"))
+        self.registry.verify_chain()  # кеш на seq=2
+
+        # Подмена ПОСЛЕДНЕЙ кешированной записи: якорная проверка обязана
+        # заметить несовпадение кешированного head_hash
+        registry_file = Path(self.storage_dir) / "registry.jsonl"
+        lines = registry_file.read_text(encoding="utf-8").splitlines()
+        entry = json.loads(lines[1])
+        entry["receipt"]["safety_approved"] = False
+        lines[1] = json.dumps(entry)
+        registry_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        result = self.registry.verify_chain()
+
+        self.assertFalse(result["valid"])
+        self.assertIn("prefix tampered", result["reason"])
+
+    def test_shrunk_ledger_detected(self) -> None:
+        self.registry.register(self._make_receipt("one"))
+        self.registry.register(self._make_receipt("two"))
+        self.registry.verify_chain()  # кеш на seq=2
+
+        # Удаление записи укорачивает журнал ниже кешированного префикса
+        registry_file = Path(self.storage_dir) / "registry.jsonl"
+        lines = registry_file.read_text(encoding="utf-8").splitlines()
+        registry_file.write_text(lines[0] + "\n", encoding="utf-8")
+
+        result = self.registry.verify_chain()
+
+        self.assertFalse(result["valid"])
+        self.assertIn("shrank", result["reason"])
+
+    def test_full_flag_always_verifies_from_genesis(self) -> None:
+        self.registry.register(self._make_receipt("one"))
+        self.registry.verify_chain()  # прогреваем кеш
+
+        full = self.registry.verify_chain(full=True)
+
+        self.assertTrue(full["valid"])
+        self.assertFalse(full["incremental"])
+
+    def test_cache_survives_restart_as_full_verify(self) -> None:
+        self.registry.register(self._make_receipt("one"))
+        self.registry.verify_chain()
+
+        # Новый экземпляр: кеш пуст, проверка снова полная
+        reopened = ReceiptRegistry(self.storage_dir)
+        result = reopened.verify_chain()
+
+        self.assertTrue(result["valid"])
+        self.assertFalse(result["incremental"])
 
 
 if __name__ == "__main__":

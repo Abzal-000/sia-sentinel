@@ -1334,9 +1334,14 @@ def get_ledger_head() -> dict[str, Any]:
 
 
 @app.get("/v1/ledger/verify")
-def verify_ledger() -> dict[str, Any]:
-    """Verify the full receipt hash chain (tamper evidence)."""
-    result = receipt_registry.verify_chain()
+def verify_ledger(full: bool = Query(False)) -> dict[str, Any]:
+    """Verify the receipt hash chain (tamper evidence).
+
+    C2: incremental by default — only entries appended since the last
+    successful verification are re-checked (plus an anchor check of the
+    cached prefix). Pass ``full=true`` to re-verify from genesis.
+    """
+    result = receipt_registry.verify_chain(full=full)
     result["public_key"] = receipt_generator.get_public_key()
     return result
 

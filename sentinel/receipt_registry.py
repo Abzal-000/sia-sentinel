@@ -168,6 +168,22 @@ class ReceiptRegistry:
         self._lock = threading.Lock()
         self._file_lock_path = self.storage_dir / ".registry.lock"
 
+        # C2: кеш инкрементальной верификации — последняя проверенная
+        # позиция (seq, её хеш и хеш-предшественник) + число legacy-записей
+        # в проверенном префиксе. Пуст после создания экземпляра, поэтому
+        # первый вызов verify_chain() в процессе всегда полный; повторные
+        # проверяют только новые записи. Кеш в памяти: рестарт процесса
+        # снова даёт полную проверку от генезиса.
+        self._verified_seq = 0
+        self._verified_hash = GENESIS_HASH
+        self._verified_prev_hash = GENESIS_HASH
+        self._verified_legacy = 0
+        self._verified_registry_id: Optional[str] = None
+        # Кеш активен только после хотя бы одной успешной верификации:
+        # append не может учредить кеш сам, иначе процесс доверился бы
+        # префиксу, который никогда не проверял
+        self._cache_established = False
+
     # === Запись ===
 
     def register(
@@ -196,6 +212,7 @@ class ReceiptRegistry:
             entry["entry_hash"] = _entry_hash(seq, prev_hash, entry)
 
             append_line_durable(self.registry_file, json.dumps(entry, default=str))
+            self._extend_cache_unlocked(seq, prev_hash, entry["entry_hash"], registry_id)
 
         return registry_id
 
@@ -366,6 +383,9 @@ class ReceiptRegistry:
             except OSError:
                 pass
             raise
+
+        # Файл изменился вне обычного append-пути — кешу нельзя доверять
+        self._reset_cache_unlocked()
 
     def get(self, registry_id: str) -> Optional[dict[str, Any]]:
         """Возвращает полную запись по идентификатору."""
@@ -548,51 +568,161 @@ class ReceiptRegistry:
         with self._lock:
             return self._head_unlocked()
 
-    def verify_chain(self) -> dict[str, Any]:
-        """Полная проверка хеш-цепочки.
+    def verify_chain(self, full: bool = False) -> dict[str, Any]:
+        """Проверка хеш-цепочки.
 
-        Возвращает {valid, entries, legacy_entries, broken_at, reason}.
+        C2: инкрементальная верификация. Кеш хранит последнюю проверенную
+        позицию; повторный вызов проверяет только новые записи плюс
+        якорную проверку кешированного префикса (запись на границе кеша
+        обязана совпадать с кешированным хешем — иначе префикс переписан
+        и доверять кешу нельзя). ``full=True`` — проверка от генезиса.
+
+        Возвращает {valid, entries, legacy_entries, broken_at, reason,
+        incremental}.
         """
-        entries = self._load_entries()
-        expected_prev = GENESIS_HASH
-        legacy_entries = 0
+        with self._lock:
+            entries = self._load_entries()
 
-        for position, entry in enumerate(entries, start=1):
-            stored_hash = entry.get("entry_hash")
-
-            if stored_hash:
-                if entry.get("prev_hash") != expected_prev:
-                    return {
-                        "valid": False,
-                        "entries": len(entries),
-                        "legacy_entries": legacy_entries,
-                        "broken_at": position,
-                        "reason": "prev_hash mismatch (record removed, inserted or reordered)",
-                    }
-
-                recomputed = _entry_hash(position, expected_prev, entry)
-
-                if recomputed != stored_hash:
-                    return {
-                        "valid": False,
-                        "entries": len(entries),
-                        "legacy_entries": legacy_entries,
-                        "broken_at": position,
-                        "reason": "entry_hash mismatch (record content tampered)",
-                    }
-
-                expected_prev = stored_hash
+            if full or not self._cache_established:
+                start = 0
+                expected_prev = GENESIS_HASH
+                legacy_entries = 0
+                incremental = False
             else:
-                legacy_entries += 1
-                expected_prev = _entry_hash(position, expected_prev, entry)
+                anchor_problem = self._check_anchor_unlocked(entries)
 
-        return {
-            "valid": True,
-            "entries": len(entries),
-            "legacy_entries": legacy_entries,
-            "broken_at": None,
-            "reason": None,
-        }
+                if anchor_problem is not None:
+                    self._reset_cache_unlocked()
+                    return {
+                        "valid": False,
+                        "entries": len(entries),
+                        "legacy_entries": 0,
+                        "broken_at": anchor_problem["broken_at"],
+                        "reason": anchor_problem["reason"],
+                        "incremental": True,
+                    }
+
+                start = self._verified_seq
+                expected_prev = self._verified_hash
+                legacy_entries = self._verified_legacy
+                incremental = True
+
+            last_entry_prev: Optional[str] = None
+
+            for position, entry in enumerate(entries[start:], start=start + 1):
+                # prev_hash текущей записи — это expected_prev до её обработки
+                last_entry_prev = expected_prev
+                stored_hash = entry.get("entry_hash")
+
+                if stored_hash:
+                    if entry.get("prev_hash") != expected_prev:
+                        return {
+                            "valid": False,
+                            "entries": len(entries),
+                            "legacy_entries": legacy_entries,
+                            "broken_at": position,
+                            "reason": "prev_hash mismatch (record removed, inserted or reordered)",
+                            "incremental": incremental,
+                        }
+
+                    recomputed = _entry_hash(position, expected_prev, entry)
+
+                    if recomputed != stored_hash:
+                        return {
+                            "valid": False,
+                            "entries": len(entries),
+                            "legacy_entries": legacy_entries,
+                            "broken_at": position,
+                            "reason": "entry_hash mismatch (record content tampered)",
+                            "incremental": incremental,
+                        }
+
+                    expected_prev = stored_hash
+                else:
+                    legacy_entries += 1
+                    expected_prev = _entry_hash(position, expected_prev, entry)
+
+            # Успех: продвигаем кеш до новой головы
+            self._cache_established = True
+            self._verified_seq = len(entries)
+            self._verified_hash = expected_prev
+            self._verified_legacy = legacy_entries
+            self._verified_registry_id = (
+                entries[-1].get("registry_id") if entries else None
+            )
+
+            # prev_hash последней обработанной записи нужен якорной проверке
+            # для legacy-якоря; не трогаем, если новых записей не было
+            if last_entry_prev is not None:
+                self._verified_prev_hash = last_entry_prev
+
+            return {
+                "valid": True,
+                "entries": len(entries),
+                "legacy_entries": legacy_entries,
+                "broken_at": None,
+                "reason": None,
+                "incremental": incremental,
+            }
+
+    # === Кеш инкрементальной верификации (C2) ===
+
+    def _check_anchor_unlocked(
+        self, entries: list[dict[str, Any]]
+    ) -> Optional[dict[str, Any]]:
+        """Якорная проверка кешированного префикса. Вызывать под self._lock.
+
+        Возвращает описание проблемы или None, если префикс на месте.
+        """
+        if len(entries) < self._verified_seq:
+            return {
+                "broken_at": len(entries) + 1,
+                "reason": "ledger shrank below the verified prefix (records removed)",
+            }
+
+        if self._verified_seq == 0:
+            return None
+
+        anchor = entries[self._verified_seq - 1]
+        # Всегда пересчитываем хеш содержимого якоря: доверять сохранённому
+        # полю entry_hash нельзя — его подмена вместе с контентом прошла бы
+        anchor_hash = _entry_hash(
+            self._verified_seq, self._verified_prev_hash, anchor
+        )
+
+        if anchor_hash != self._verified_hash:
+            return {
+                "broken_at": self._verified_seq,
+                "reason": "verified prefix tampered (cached head hash mismatch)",
+            }
+
+        return None
+
+    def _extend_cache_unlocked(
+        self, seq: int, prev_hash: str, entry_hash: str, registry_id: str
+    ) -> None:
+        """Продвигает кеш после успешного append. Вызывать под self._lock.
+
+        Продвигает только уже учреждённый кеш (после успешной верификации):
+        append сам по себе не может учредить доверие к префиксу.
+        """
+        if not self._cache_established:
+            return
+
+        if self._verified_seq == seq - 1 and self._verified_hash == prev_hash:
+            self._verified_prev_hash = prev_hash
+            self._verified_hash = entry_hash
+            self._verified_seq = seq
+            self._verified_registry_id = registry_id
+
+    def _reset_cache_unlocked(self) -> None:
+        """Сброс кеша (префикс скомпрометирован — нужна полная проверка)."""
+        self._cache_established = False
+        self._verified_seq = 0
+        self._verified_hash = GENESIS_HASH
+        self._verified_prev_hash = GENESIS_HASH
+        self._verified_legacy = 0
+        self._verified_registry_id = None
 
     # === Чекпоинты (якорение головы цепочки) ===
 
