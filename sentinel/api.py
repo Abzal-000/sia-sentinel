@@ -1324,13 +1324,62 @@ def verify_registered_receipt(
 
 @app.get("/v1/ledger/head")
 def get_ledger_head() -> dict[str, Any]:
-    """Current head of the receipt hash chain (seq + head hash)."""
+    """Current head of the receipt hash chain plus the Merkle tree head.
+
+    C1: ``tree_size``/``root_hash`` cover every entry (RFC 6962-style
+    accumulator), so an external auditor can verify inclusion and
+    consistency proofs against this head.
+    """
     head = receipt_registry.head()
+    tree = receipt_registry.tree_head()
 
     if head is None:
-        return {"seq": 0, "entry_hash": None, "registry_id": None, "registered_at": None}
+        return {
+            "seq": 0,
+            "entry_hash": None,
+            "registry_id": None,
+            "registered_at": None,
+            "tree_size": tree["tree_size"],
+            "root_hash": tree["root_hash"],
+        }
 
-    return head
+    return {**head, "tree_size": tree["tree_size"], "root_hash": tree["root_hash"]}
+
+
+@app.get("/v1/ledger/inclusion/{registry_id}")
+def get_inclusion_proof(registry_id: str) -> dict[str, Any]:
+    """C1: Merkle inclusion proof for a registry entry.
+
+    Returns the leaf index, entry hash, tree size/root and the audit
+    path; verifiable independently (see sia-verifier).
+    """
+    proof = receipt_registry.inclusion_proof(registry_id)
+
+    if proof is None:
+        raise HTTPException(status_code=404, detail=f"Entry not found: {registry_id}")
+
+    return proof
+
+
+@app.get("/v1/ledger/consistency")
+def get_consistency_proof(
+    from_size: int = Query(..., alias="from", ge=0),
+    to_size: Optional[int] = Query(None, alias="to", ge=0),
+) -> dict[str, Any]:
+    """C1: Merkle consistency proof between two tree heads.
+
+    Proves the tree of size ``to`` (default: current) is an append-only
+    extension of the tree of size ``from``.
+    """
+    proof = receipt_registry.consistency_proof(from_size, to_size)
+
+    if proof is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid tree sizes: from={from_size}, to={to_size}",
+        )
+
+    return proof
 
 
 @app.get("/v1/ledger/verify")

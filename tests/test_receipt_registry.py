@@ -1,9 +1,13 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+
+# Пакет верификатора лежит в verifier/ — добавляем в sys.path для тестов
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "verifier"))
 
 from sentinel.cryptographic_receipts import ReceiptGenerator, ReceiptVerifier
 from sentinel.receipt_registry import ReceiptRegistry
@@ -422,6 +426,139 @@ class IncrementalVerificationTestCase(unittest.TestCase):
 
         self.assertTrue(result["valid"])
         self.assertFalse(result["incremental"])
+
+
+class MerkleAccumulatorTestCase(unittest.TestCase):
+    """C1: Merkle tree heads, inclusion и consistency доказательства."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.storage_dir = str(Path(self._tmp.name) / "receipts")
+
+        self.generator = ReceiptGenerator("merkle-test-key")
+        self.verifier = ReceiptVerifier(self.generator.get_public_key())
+        self.registry = ReceiptRegistry(self.storage_dir)
+        self.registry_ids: list[str] = []
+
+        for name in ("one", "two", "three", "four", "five"):
+            receipt = self.generator.generate_receipt(
+                evidence_id=f"evidence-{name}",
+                code=f"# code for {name}",
+                safety_approved=True,
+                trust_level="JUNIOR",
+            )
+            self.registry_ids.append(
+                self.registry.register(receipt, metadata={"flow_name": name})
+            )
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_tree_head_tracks_entries(self) -> None:
+        head = self.registry.tree_head()
+
+        self.assertEqual(head["tree_size"], 5)
+        self.assertIsNotNone(head["root_hash"])
+
+    def test_inclusion_proof_verifies_independently(self) -> None:
+        from sentinel.merkle import verify_inclusion
+
+        for registry_id in self.registry_ids:
+            proof = self.registry.inclusion_proof(registry_id)
+
+            self.assertIsNotNone(proof)
+            self.assertTrue(
+                verify_inclusion(
+                    proof["entry_hash"],
+                    proof["leaf_index"],
+                    proof["tree_size"],
+                    proof["root_hash"],
+                    proof["proof"],
+                )
+            )
+
+    def test_inclusion_proof_for_unknown_entry_returns_none(self) -> None:
+        self.assertIsNone(self.registry.inclusion_proof("nonexistent"))
+
+    def test_inclusion_proof_rejects_wrong_entry_hash(self) -> None:
+        from sentinel.merkle import verify_inclusion
+
+        proof = self.registry.inclusion_proof(self.registry_ids[2])
+
+        self.assertFalse(
+            verify_inclusion(
+                "f" * 64,
+                proof["leaf_index"],
+                proof["tree_size"],
+                proof["root_hash"],
+                proof["proof"],
+            )
+        )
+
+    def test_consistency_proof_between_heads(self) -> None:
+        from sentinel.merkle import verify_consistency
+
+        for from_size in range(0, 6):
+            proof = self.registry.consistency_proof(from_size, 5)
+
+            self.assertIsNotNone(proof)
+            self.assertTrue(
+                verify_consistency(
+                    proof["from_size"],
+                    proof["from_root"],
+                    proof["to_size"],
+                    proof["to_root"],
+                    proof["proof"],
+                )
+            )
+
+    def test_consistency_proof_invalid_sizes_return_none(self) -> None:
+        self.assertIsNone(self.registry.consistency_proof(6, 5))
+        self.assertIsNone(self.registry.consistency_proof(-1, 5))
+
+    def test_checkpoint_v2_covers_tree_head(self) -> None:
+        checkpoint = self.registry.create_checkpoint(self.generator)
+
+        self.assertEqual(checkpoint["protocol"], "trustchain-checkpoint/2")
+        self.assertEqual(checkpoint["tree_size"], 5)
+        self.assertEqual(checkpoint["root_hash"], self.registry.tree_head()["root_hash"])
+        self.assertTrue(self.registry.verify_checkpoint(checkpoint, self.verifier))
+
+        # Подмена tree head ломает подпись
+        tampered = dict(checkpoint)
+        tampered["root_hash"] = "f" * 64
+        self.assertFalse(self.registry.verify_checkpoint(tampered, self.verifier))
+
+    def test_independent_verifier_accepts_checkpoint_and_proofs(self) -> None:
+        """sia-verifier (автономный пакет) проверяет то же самое."""
+        import sia_verifier
+
+        checkpoint = self.registry.create_checkpoint(self.generator)
+        public_key = self.generator.get_public_key()
+
+        self.assertTrue(sia_verifier.verify_checkpoint(checkpoint, public_key))
+
+        proof = self.registry.inclusion_proof(self.registry_ids[0])
+        self.assertTrue(
+            sia_verifier.verify_inclusion(
+                proof["entry_hash"],
+                proof["leaf_index"],
+                proof["tree_size"],
+                checkpoint["root_hash"],
+                proof["proof"],
+            )
+        )
+
+        cproof = self.registry.consistency_proof(3, 5)
+        self.assertTrue(
+            sia_verifier.verify_consistency(
+                cproof["from_size"],
+                cproof["from_root"],
+                cproof["to_size"],
+                cproof["to_root"],
+                cproof["proof"],
+            )
+        )
 
 
 if __name__ == "__main__":

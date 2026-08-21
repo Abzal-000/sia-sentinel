@@ -43,11 +43,14 @@ from .cryptographic_receipts import (
     ReceiptGenerator,
     ReceiptVerifier,
 )
+from .merkle import MerkleAccumulator, leaf_hash
 
 logger = logging.getLogger(__name__)
 
 GENESIS_HASH = "0" * 64
 CHECKPOINT_PROTOCOL = "trustchain-checkpoint/1"
+# v2: чекпоинт покрывает и Merkle tree head (C1)
+CHECKPOINT_PROTOCOL_V2 = "trustchain-checkpoint/2"
 
 
 class _FileLock:
@@ -184,6 +187,12 @@ class ReceiptRegistry:
         # префиксу, который никогда не проверял
         self._cache_established = False
 
+        # C1: кеш Merkle-аккумулятора. Журнал append-only, поэтому кеш
+        # валиден, пока число записей не изменилось; при изменении
+        # перестраивается из файла.
+        self._merkle_cache: Optional[MerkleAccumulator] = None
+        self._merkle_cache_size = 0
+
     # === Запись ===
 
     def register(
@@ -209,10 +218,11 @@ class ReceiptRegistry:
                 "receipt": receipt.to_dict(),
                 "metadata": metadata or {},
             }
-            entry["entry_hash"] = _entry_hash(seq, prev_hash, entry)
+            entry_hash = _entry_hash(seq, prev_hash, entry)
+            entry["entry_hash"] = entry_hash
 
             append_line_durable(self.registry_file, json.dumps(entry, default=str))
-            self._extend_cache_unlocked(seq, prev_hash, entry["entry_hash"], registry_id)
+            self._extend_cache_unlocked(seq, prev_hash, entry_hash, registry_id)
 
         return registry_id
 
@@ -724,6 +734,115 @@ class ReceiptRegistry:
         self._verified_legacy = 0
         self._verified_registry_id = None
 
+    # === Merkle-аккумулятор (C1) ===
+
+    def _merkle_unlocked(self) -> MerkleAccumulator:
+        """Аккумулятор по хешам ВСЕХ записей. Вызывать под self._lock.
+
+        Листья идут в порядке записей, поэтому индекс листа совпадает с
+        позицией записи в журнале. Для legacy-записей (без сохранённого
+        entry_hash) хеш вычисляется детерминированно, как при проверке
+        цепочки. Кеш валиден, пока число записей не изменилось (журнал
+        append-only); при изменении перестраивается из файла.
+        """
+        entries = self._load_entries()
+
+        if self._merkle_cache is None or self._merkle_cache_size != len(entries):
+            leaves: list[str] = []
+            prev_hash = GENESIS_HASH
+
+            for seq, entry in enumerate(entries, start=1):
+                stored = entry.get("entry_hash")
+
+                if stored:
+                    entry_hash = stored
+                else:
+                    entry_hash = _entry_hash(seq, prev_hash, entry)
+
+                leaves.append(leaf_hash(entry_hash))
+                prev_hash = entry_hash
+
+            self._merkle_cache = MerkleAccumulator(leaves)
+            self._merkle_cache_size = len(entries)
+
+        return self._merkle_cache
+
+    def tree_head(self) -> dict[str, Any]:
+        """Merkle tree head: {tree_size, root_hash} (None для пустого журнала)."""
+        with self._lock:
+            acc = self._merkle_unlocked()
+            return {"tree_size": acc.tree_size, "root_hash": acc.root_hash()}
+
+    def inclusion_proof(self, registry_id: str) -> Optional[dict[str, Any]]:
+        """Доказательство включения записи в текущий tree head.
+
+        Возвращает {registry_id, entry_hash, leaf_index, tree_size,
+        root_hash, proof} или None, если запись не найдена.
+        """
+        with self._lock:
+            entries = self._load_entries()
+            index = next(
+                (i for i, e in enumerate(entries) if e.get("registry_id") == registry_id),
+                None,
+            )
+
+            if index is None:
+                return None
+
+            entry = entries[index]
+            stored = entry.get("entry_hash")
+
+            # Legacy-запись: хеш вычисляется детерминированно
+            if stored:
+                entry_hash = stored
+            else:
+                prev_hash = GENESIS_HASH
+
+                for seq, e in enumerate(entries[:index], start=1):
+                    prev_hash = e.get("entry_hash") or _entry_hash(seq, prev_hash, e)
+
+                entry_hash = _entry_hash(index + 1, prev_hash, entry)
+
+            acc = self._merkle_unlocked()
+            size = acc.tree_size
+
+            return {
+                "registry_id": registry_id,
+                "entry_hash": entry_hash,
+                "leaf_index": index,
+                "tree_size": size,
+                "root_hash": acc.root_hash(size),
+                "proof": acc.inclusion_proof(index, size),
+            }
+
+    def consistency_proof(
+        self, from_size: int, to_size: Optional[int] = None
+    ) -> Optional[dict[str, Any]]:
+        """Доказательство согласованности двух tree heads.
+
+        Возвращает {from_size, to_size, from_root, to_root, proof} или
+        None при некорректных размерах.
+        """
+        with self._lock:
+            acc = self._merkle_unlocked()
+            size = acc.tree_size
+
+            if to_size is None:
+                to_size = size
+
+            proof = acc.consistency_proof(from_size, to_size)
+
+            if proof is None:
+                return None
+
+            return {
+                "from_size": from_size,
+                "to_size": to_size,
+                "from_root": acc.root_hash(from_size) if from_size else None,
+                "to_root": acc.root_hash(to_size),
+                "proof": proof,
+            }
+
     # === Чекпоинты (якорение головы цепочки) ===
 
     def _load_checkpoints(self) -> list[dict[str, Any]]:
@@ -731,6 +850,11 @@ class ReceiptRegistry:
 
     def create_checkpoint(self, generator: ReceiptGenerator) -> Optional[dict[str, Any]]:
         """Подписывает текущую голову цепочки и сохраняет чекпоинт.
+
+        C1: чекпоинт покрывает и Merkle tree head (tree_size + root_hash),
+        поэтому подписанный чекпоинт фиксирует не только последний хеш
+        цепочки, но и всё дерево — внешний аудитор может проверить
+        inclusion/consistency против него.
 
         Возвращает None, если журнал пуст.
         """
@@ -740,13 +864,17 @@ class ReceiptRegistry:
             if head is None:
                 return None
 
+            acc = self._merkle_unlocked()
+
             checkpoint = {
-                "protocol": CHECKPOINT_PROTOCOL,
+                "protocol": CHECKPOINT_PROTOCOL_V2,
                 "checkpoint_id": uuid.uuid4().hex,
                 "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
                 "seq": head["seq"],
                 "head_hash": head["entry_hash"],
                 "registry_id": head["registry_id"],
+                "tree_size": acc.tree_size,
+                "root_hash": acc.root_hash(),
                 "public_key": generator.get_public_key(),
             }
             checkpoint["signature"] = generator.sign_bytes(
@@ -776,7 +904,11 @@ class ReceiptRegistry:
 
 
 def _checkpoint_commitment(checkpoint: dict[str, Any]) -> bytes:
-    """Детерминированные байты, покрытые подписью чекпоинта."""
+    """Детерминированные байты, покрытые подписью чекпоинта.
+
+    C1: tree_size и root_hash включены в коммитмент (v2); для
+    legacy-чекпоинтов (v1) их нет, и они не попадают в подпись.
+    """
     commitment = {
         "protocol": checkpoint.get("protocol"),
         "checkpoint_id": checkpoint.get("checkpoint_id"),
@@ -785,4 +917,9 @@ def _checkpoint_commitment(checkpoint: dict[str, Any]) -> bytes:
         "head_hash": checkpoint.get("head_hash"),
         "registry_id": checkpoint.get("registry_id"),
     }
+
+    if checkpoint.get("protocol") == CHECKPOINT_PROTOCOL_V2:
+        commitment["tree_size"] = checkpoint.get("tree_size")
+        commitment["root_hash"] = checkpoint.get("root_hash")
+
     return _canonical_json(commitment)

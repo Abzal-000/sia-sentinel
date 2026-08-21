@@ -17,7 +17,11 @@ TrustChain. Никаких сетевых вызовов, никакого SDK S
 3. **Хеш-цепочка TrustChain** (опционально, по выгрузке журнала) —
    каждая запись пересчитывается из ``seq``, ``prev_hash`` и содержимого;
    удаление, вставка, перестановка или подмена записи ломают цепочку.
-4. **Чекпоинты** — подписанные коммитменты на голову цепочки.
+4. **Чекпоинты** — подписанные коммитменты на голову цепочки (v1) и на
+   голову цепочки + Merkle tree head (v2).
+5. **Merkle-доказательства** (RFC 6962) — ``verify_inclusion`` проверяет
+   включение записи в tree head, ``verify_consistency`` — что дерево
+   размера N является продолжением дерева размера M.
 
 CLI::
 
@@ -33,21 +37,27 @@ from .core import (
     ATTESTATION_SPEC,
     AttestationVerdict,
     ChainVerdict,
+    leaf_hash,
     verify_attestation,
     verify_chain,
     verify_checkpoint,
+    verify_consistency,
+    verify_inclusion,
     verify_receipt,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "ATTESTATION_SPEC",
     "AttestationVerdict",
     "ChainVerdict",
+    "leaf_hash",
     "verify_attestation",
     "verify_chain",
     "verify_checkpoint",
+    "verify_consistency",
+    "verify_inclusion",
     "verify_receipt",
     "__version__",
 ]

@@ -19,6 +19,13 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 ATTESTATION_SPEC = "sia-attestation/1"
 GENESIS_HASH = "0" * 64
 CHECKPOINT_PROTOCOL = "trustchain-checkpoint/1"
+# v2: подпись чекпоинта покрывает и Merkle tree head (C1)
+CHECKPOINT_PROTOCOL_V2 = "trustchain-checkpoint/2"
+KNOWN_CHECKPOINT_PROTOCOLS = (CHECKPOINT_PROTOCOL, CHECKPOINT_PROTOCOL_V2)
+
+# RFC 6962 §2.1: префиксы доменной сепарации хешей
+LEAF_PREFIX = b"\x00"
+NODE_PREFIX = b"\x01"
 
 
 def _canonical_json(value: dict[str, Any]) -> bytes:
@@ -247,7 +254,10 @@ def verify_chain(
 
 
 def _checkpoint_commitment(checkpoint: dict[str, Any]) -> bytes:
-    """Детерминированные байты, покрытые подписью чекпоинта (spec §3)."""
+    """Детерминированные байты, покрытые подписью чекпоинта (spec §3).
+
+    v2 включает tree_size/root_hash в коммитмент; v1 — нет.
+    """
     commitment = {
         "protocol": checkpoint.get("protocol"),
         "checkpoint_id": checkpoint.get("checkpoint_id"),
@@ -256,14 +266,19 @@ def _checkpoint_commitment(checkpoint: dict[str, Any]) -> bytes:
         "head_hash": checkpoint.get("head_hash"),
         "registry_id": checkpoint.get("registry_id"),
     }
+
+    if checkpoint.get("protocol") == CHECKPOINT_PROTOCOL_V2:
+        commitment["tree_size"] = checkpoint.get("tree_size")
+        commitment["root_hash"] = checkpoint.get("root_hash")
+
     return _canonical_json(commitment)
 
 
 def verify_checkpoint(checkpoint: dict[str, Any], public_key_b64: str) -> bool:
-    """Проверяет подпись чекпоинта публичным ключом."""
+    """Проверяет подпись чекпоинта публичным ключом (v1 и v2)."""
     signature = checkpoint.get("signature")
 
-    if not signature or checkpoint.get("protocol") != CHECKPOINT_PROTOCOL:
+    if not signature or checkpoint.get("protocol") not in KNOWN_CHECKPOINT_PROTOCOLS:
         return False
 
     try:
@@ -272,3 +287,126 @@ def verify_checkpoint(checkpoint: dict[str, Any], public_key_b64: str) -> bool:
         return True
     except (InvalidSignature, ValueError, TypeError):
         return False
+
+
+# === Merkle-доказательства (C1, RFC 6962) ===
+
+
+def leaf_hash(entry_hash: str) -> str:
+    """Хеш листа Merkle-дерева из entry_hash записи цепочки."""
+    return hashlib.sha256(LEAF_PREFIX + bytes.fromhex(entry_hash)).hexdigest()
+
+
+def _node_hash(left: str, right: str) -> str:
+    return hashlib.sha256(
+        NODE_PREFIX + bytes.fromhex(left) + bytes.fromhex(right)
+    ).hexdigest()
+
+
+def verify_inclusion(
+    entry_hash: str,
+    leaf_index: int,
+    tree_size: int,
+    root_hash: str,
+    proof: list[dict[str, str]],
+) -> bool:
+    """Проверяет inclusion proof записи в tree head (RFC 6962 §2.1.1).
+
+    proof — список {"hash", "direction"} от листа к корню; direction —
+    сторона брата ("left"|"right").
+    """
+    if leaf_index < 0 or tree_size <= 0 or leaf_index >= tree_size:
+        return False
+
+    fn = leaf_hash(entry_hash)
+
+    for step in proof:
+        sibling = step.get("hash", "")
+        direction = step.get("direction")
+
+        if direction == "left":
+            fn = _node_hash(sibling, fn)
+        elif direction == "right":
+            fn = _node_hash(fn, sibling)
+        else:
+            return False
+
+    return fn == root_hash
+
+
+def _largest_power_of_two_less_than(n: int) -> int:
+    k = 1
+
+    while k * 2 < n:
+        k *= 2
+
+    return k
+
+
+def verify_consistency(
+    old_size: int,
+    old_root: Optional[str],
+    new_size: int,
+    new_root: str,
+    proof: list[str],
+) -> bool:
+    """Проверяет consistency proof между двумя tree heads (RFC 6962 §2.1.2).
+
+    Рекурсивно восстанавливает оба корня из SUBPROOF и сверяет их.
+    """
+    if old_size < 0 or new_size < old_size:
+        return False
+
+    if old_size == 0:
+        return True
+
+    if old_size == new_size:
+        return len(proof) == 0 and old_root == new_root
+
+    if old_root is None:
+        return False
+
+    pos = 0
+
+    def rec(start: int, end: int, old_count: int, complete: bool) -> tuple[str, str]:
+        nonlocal pos
+        n = end - start
+
+        if old_count == n:
+            if complete:
+                return old_root, old_root  # type: ignore[return-value]
+
+            if pos >= len(proof):
+                raise ValueError("proof too short")
+
+            h = proof[pos]
+            pos += 1
+            return h, h
+
+        k = _largest_power_of_two_less_than(n)
+
+        if old_count <= k:
+            left_new, left_old = rec(start, start + k, old_count, complete)
+
+            if pos >= len(proof):
+                raise ValueError("proof too short")
+
+            right = proof[pos]
+            pos += 1
+            return _node_hash(left_new, right), left_old
+
+        right_new, right_old = rec(start + k, end, old_count - k, False)
+
+        if pos >= len(proof):
+            raise ValueError("proof too short")
+
+        left = proof[pos]
+        pos += 1
+        return _node_hash(left, right_new), _node_hash(left, right_old)
+
+    try:
+        new_h, old_h = rec(0, new_size, old_size, True)
+    except ValueError:
+        return False
+
+    return pos == len(proof) and new_h == new_root and old_h == old_root
