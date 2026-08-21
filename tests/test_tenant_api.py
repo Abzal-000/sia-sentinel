@@ -261,7 +261,9 @@ class TenantAPITestCase(unittest.TestCase):
         )
         registry_id = response.json()["registry_id"]
 
-        entry = self.client.get(f"/v1/receipts/{registry_id}").json()
+        entry = self.client.get(
+            f"/v1/receipts/{registry_id}", headers=acme_headers
+        ).json()
         self.assertEqual(entry["metadata"]["tenant_id"], "acme")
 
 

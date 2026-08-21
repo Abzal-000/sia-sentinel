@@ -189,7 +189,7 @@ class PreregistrationAPITestCase(unittest.TestCase):
             "/v1/audit", json={"flow": LLM_FLOW}, headers=self._auth_headers
         )
 
-        listing = self.client.get("/v1/receipts").json()
+        listing = self.client.get("/v1/receipts", headers=self._auth_headers).json()
         self.assertEqual(listing["total"], 1)
 
     def test_chain_valid_with_preregistration(self) -> None:

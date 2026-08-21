@@ -313,13 +313,18 @@ def calculate_risk_score(
 
 
 @app.get("/v1/policies")
-def list_policies() -> list[dict[str, Any]]:
+def list_policies(
+    user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
+) -> list[dict[str, Any]]:
     """List all loaded policies."""
     return policy_engine.list_policies()
 
 
 @app.get("/v1/verifications/{evidence_id}")
-def get_verification(evidence_id: str) -> dict[str, Any]:
+def get_verification(
+    evidence_id: str,
+    user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
+) -> dict[str, Any]:
     evidence = evidence_store.get_by_id(evidence_id)
 
     if evidence is None:
@@ -333,7 +338,10 @@ def get_verification(evidence_id: str) -> dict[str, Any]:
 
 
 @app.get("/v1/agents/{agent_id}/trust", response_model=TrustInfoResponse)
-def get_agent_trust(agent_id: str) -> TrustInfoResponse:
+def get_agent_trust(
+    agent_id: str,
+    user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
+) -> TrustInfoResponse:
     trust_manager = _get_trust_manager(agent_id)
 
     return TrustInfoResponse(
@@ -349,6 +357,7 @@ def get_agent_trust(agent_id: str) -> TrustInfoResponse:
 def get_agent_history(
     agent_id: str,
     limit: int = Query(default=100, ge=1, le=1000),
+    user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
 ) -> list[dict[str, Any]]:
     """Get verification history for agent."""
     return evidence_store.get_by_agent(agent_id, limit=limit)
@@ -358,6 +367,7 @@ def get_agent_history(
 def get_all_evidence(
     limit: int = Query(default=100, ge=1, le=1000),
     approved_only: bool = Query(default=False),
+    user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
 ) -> list[dict[str, Any]]:
     """Get all evidence with optional filtering."""
     return evidence_store.get_all(limit=limit, approved_only=approved_only)
@@ -1033,10 +1043,13 @@ def get_usage_summary(
 
 class ChangePlanRequest(PydanticBaseModel):
     plan: str
+    # B4: платформенный админ управляет любым тенантом; по умолчанию — свой.
+    tenant_id: Optional[str] = None
 
 
 class IssueInvoiceRequest(PydanticBaseModel):
     period: Optional[str] = None  # "YYYY-MM"; default = current month
+    tenant_id: Optional[str] = None  # B4: целевой тенант для платформенного админа
 
 
 @app.get("/v1/billing/plans")
@@ -1066,21 +1079,27 @@ def change_billing_plan(
     request: ChangePlanRequest,
     user: User = Depends(require_platform_admin),
 ) -> dict[str, Any]:
-    """Switch the caller's tenant to another plan (platform admin only)."""
+    """Switch a tenant to another plan (platform admin only).
+
+    B4: the admin may target any tenant via ``tenant_id``; omitted means
+    the admin's own tenant.
+    """
     if request.plan not in PLANS:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown plan: {request.plan}. Available: {sorted(PLANS)}",
         )
 
+    target_tenant = request.tenant_id or user.tenant_id
+
     try:
-        tenant = billing_engine.set_plan(user.tenant_id, request.plan)
+        tenant = billing_engine.set_plan(target_tenant, request.plan)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
 
     return {
         "tenant": tenant.to_dict(),
-        "quota": billing_engine.quota_status(user.tenant_id),
+        "quota": billing_engine.quota_status(target_tenant),
     }
 
 
@@ -1102,12 +1121,16 @@ def issue_billing_invoice(
     request: IssueInvoiceRequest,
     user: User = Depends(require_platform_admin),
 ) -> dict[str, Any]:
-    """Issue an invoice for the caller's tenant (platform admin only).
+    """Issue an invoice for a tenant (platform admin only).
 
-    Idempotent per tenant+period: a repeat call returns the existing invoice.
+    B4: the admin may target any tenant via ``tenant_id``; omitted means
+    the admin's own tenant. Idempotent per tenant+period: a repeat call
+    returns the existing invoice.
     """
+    target_tenant = request.tenant_id or user.tenant_id
+
     try:
-        invoice = billing_engine.issue_invoice(user.tenant_id, request.period)
+        invoice = billing_engine.issue_invoice(target_tenant, request.period)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 
@@ -1188,27 +1211,65 @@ def delete_webhook_subscription(
 
 
 @app.get("/v1/receipts")
-def list_receipts(limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0)) -> dict[str, Any]:
-    """List registered Proof-of-Savings receipts (newest first)."""
-    receipts = receipt_registry.list_receipts(limit=limit, offset=offset)
+def list_receipts(
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    all_tenants: bool = Query(False, description="Platform admin only: list receipts of every tenant."),
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """List registered Proof-of-Savings receipts (newest first).
 
-    return {"count": len(receipts), "total": receipt_registry.count_receipts(), "receipts": receipts}
+    B1: authenticated only. A tenant sees its own receipts; the public
+    showcase for opted-in tenants lives at /v1/attestations and /registry.
+    Platform admins may pass all_tenants=true to see everything.
+    """
+    if all_tenants:
+        if not user.is_platform_admin:
+            raise HTTPException(status_code=403, detail="all_tenants requires platform admin")
+        receipts = receipt_registry.list_receipts(limit=limit, offset=offset)
+        total = receipt_registry.count_receipts()
+    else:
+        receipts = receipt_registry.list_for_tenant(user.tenant_id, limit=limit, offset=offset)
+        total = receipt_registry.count_receipts(tenant_id=user.tenant_id)
+
+    return {"count": len(receipts), "total": total, "receipts": receipts}
 
 
 @app.get("/v1/receipts/{registry_id}")
-def get_receipt(registry_id: str) -> dict[str, Any]:
-    """Fetch a full registry entry (receipt + metadata)."""
+def get_receipt(registry_id: str, user: User = Depends(get_current_user)) -> dict[str, Any]:
+    """Fetch a full registry entry (receipt + metadata).
+
+    B1: tenants may only fetch their own entries; platform admins may
+    fetch any entry.
+    """
     entry = receipt_registry.get(registry_id)
 
     if entry is None:
+        raise HTTPException(status_code=404, detail=f"Receipt not found: {registry_id}")
+
+    entry_tenant = (entry.get("metadata") or {}).get("tenant_id")
+    if not user.is_platform_admin and entry_tenant != user.tenant_id:
+        # Не раскрываем сам факт существования чужой записи.
         raise HTTPException(status_code=404, detail=f"Receipt not found: {registry_id}")
 
     return entry
 
 
 @app.get("/v1/receipts/{registry_id}/verify")
-def verify_registered_receipt(registry_id: str) -> dict[str, Any]:
+def verify_registered_receipt(
+    registry_id: str,
+    user: User = Depends(get_current_user),
+) -> dict[str, Any]:
     """Verify a stored receipt's Ed25519 signature with the public key."""
+    entry = receipt_registry.get(registry_id)
+
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Receipt not found: {registry_id}")
+
+    entry_tenant = (entry.get("metadata") or {}).get("tenant_id")
+    if not user.is_platform_admin and entry_tenant != user.tenant_id:
+        raise HTTPException(status_code=404, detail=f"Receipt not found: {registry_id}")
+
     valid = receipt_registry.verify_stored(registry_id, receipt_verifier)
 
     if valid is None:

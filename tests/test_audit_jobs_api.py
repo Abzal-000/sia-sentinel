@@ -127,8 +127,8 @@ class AuditJobsAPITestCase(unittest.TestCase):
         self.assertTrue(result["report"]["claim"]["savings_verified"])
         self.assertIn("receipt", result)
 
-        # Квитанция зарегистрирована и видна в публичном реестре
-        listing = self.client.get("/v1/receipts").json()
+        # Квитанция зарегистрирована и видна своему тенанту в реестре
+        listing = self.client.get("/v1/receipts", headers=self._auth_headers).json()
         self.assertEqual(listing["total"], 1)
         self.assertEqual(listing["receipts"][0]["registry_id"], result["registry_id"])
 

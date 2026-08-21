@@ -319,9 +319,56 @@ class ReceiptRegistry:
         """Число записей в цепочке (включая предрегистрации)."""
         return len(self._load_entries())
 
-    def count_receipts(self) -> int:
-        """Число квитанций (без записей предрегистрации)."""
-        return sum(1 for e in self._load_entries() if e.get("receipt") is not None)
+    def count_receipts(self, tenant_id: Optional[str] = None) -> int:
+        """Число квитанций (без записей предрегистрации).
+
+        С tenant_id считает только квитанции этого тенанта.
+        """
+        if tenant_id is None:
+            return sum(1 for e in self._load_entries() if e.get("receipt") is not None)
+
+        return sum(
+            1
+            for e in self._load_entries()
+            if e.get("receipt") is not None
+            and (e.get("metadata") or {}).get("tenant_id") == tenant_id
+        )
+
+    def list_for_tenant(
+        self,
+        tenant_id: str,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """Карточки квитанций только указанного тенанта, новые сверху.
+
+        Изоляция B1: список квитанций по API никогда не должен показывать
+        чужие тенанты. Записи предрегистрации пропускаются.
+        """
+        entries = [
+            e for e in reversed(self._load_entries())
+            if e.get("receipt") is not None
+            and (e.get("metadata") or {}).get("tenant_id") == tenant_id
+        ]
+        window = entries[offset:offset + limit]
+
+        summaries = []
+
+        for entry in window:
+            receipt = entry.get("receipt", {})
+            summaries.append(
+                {
+                    "registry_id": entry.get("registry_id"),
+                    "receipt_id": receipt.get("receipt_id"),
+                    "registered_at": entry.get("registered_at"),
+                    "evidence_id": receipt.get("evidence_id"),
+                    "safety_approved": receipt.get("safety_approved"),
+                    "has_manifest": receipt.get("manifest") is not None,
+                    "metadata": entry.get("metadata", {}),
+                }
+            )
+
+        return summaries
 
     def list_public(
         self,

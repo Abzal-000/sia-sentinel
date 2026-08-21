@@ -134,8 +134,8 @@ class OptimizeAPITestCase(unittest.TestCase):
         self.assertIn("registry_id", result)
         self.assertIn("receipt", result)
 
-        # Аттестация зарегистрирована в публичном реестре
-        listing = self.client.get("/v1/receipts").json()
+        # Аттестация зарегистрирована и видна своему тенанту в реестре
+        listing = self.client.get("/v1/receipts", headers=self._auth_headers).json()
         self.assertEqual(listing["total"], 1)
         self.assertEqual(listing["receipts"][0]["registry_id"], result["registry_id"])
 

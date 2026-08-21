@@ -176,6 +176,33 @@ class BillingAPITestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["tenant"]["plan"], "pro")
 
+    def test_change_plan_targets_other_tenant(self) -> None:
+        # B4: платформенный админ управляет ЛЮБЫМ тенантом через tenant_id.
+        self._create_tenant("acme")
+
+        response = self.client.post(
+            "/v1/billing/plan",
+            json={"plan": "pro", "tenant_id": "acme"},
+            headers=self._admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["tenant"]["tenant_id"], "acme")
+        self.assertEqual(response.json()["tenant"]["plan"], "pro")
+
+    def test_issue_invoice_targets_other_tenant(self) -> None:
+        # B4: инвойс выставляется указанному тенанту, а не тенанту админа.
+        self._create_tenant("acme")
+
+        response = self.client.post(
+            "/v1/billing/invoices",
+            json={"tenant_id": "acme"},
+            headers=self._admin_headers,
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["invoice"]["tenant_id"], "acme")
+
     # --- Квоты на эндпоинтах аудита ---
 
     def test_free_tenant_blocked_at_quota_with_402(self) -> None:

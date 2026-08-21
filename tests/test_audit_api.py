@@ -183,15 +183,19 @@ class AuditAPITestCase(unittest.TestCase):
         ).json()
         registry_id = audit["registry_id"]
 
-        listing = self.client.get("/v1/receipts").json()
+        listing = self.client.get("/v1/receipts", headers=self._auth_headers).json()
         self.assertEqual(listing["total"], 1)
         self.assertEqual(listing["receipts"][0]["registry_id"], registry_id)
         self.assertEqual(listing["receipts"][0]["metadata"]["flow_name"], "api-router-flow")
 
-        entry = self.client.get(f"/v1/receipts/{registry_id}").json()
+        entry = self.client.get(
+            f"/v1/receipts/{registry_id}", headers=self._auth_headers
+        ).json()
         self.assertEqual(entry["receipt"]["evidence_id"], "audit-api-router-flow")
 
-        verification = self.client.get(f"/v1/receipts/{registry_id}/verify").json()
+        verification = self.client.get(
+            f"/v1/receipts/{registry_id}/verify", headers=self._auth_headers
+        ).json()
         self.assertTrue(verification["valid"])
         self.assertIn("public_key", verification)
 
@@ -219,14 +223,70 @@ class AuditAPITestCase(unittest.TestCase):
             encoding="utf-8",
         )
 
-        response = self.client.get(f"/v1/receipts/{registry_id}/verify")
+        response = self.client.get(
+            f"/v1/receipts/{registry_id}/verify", headers=self._auth_headers
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertFalse(response.json()["valid"])
 
     def test_unknown_receipt_404(self) -> None:
-        self.assertEqual(self.client.get("/v1/receipts/missing").status_code, 404)
-        self.assertEqual(self.client.get("/v1/receipts/missing/verify").status_code, 404)
+        self.assertEqual(
+            self.client.get("/v1/receipts/missing", headers=self._auth_headers).status_code, 404
+        )
+        self.assertEqual(
+            self.client.get(
+                "/v1/receipts/missing/verify", headers=self._auth_headers
+            ).status_code,
+            404,
+        )
+
+    def test_receipts_require_authentication(self) -> None:
+        # B1: без авторизации список и отдельные квитанции недоступны.
+        self.assertEqual(self.client.get("/v1/receipts").status_code, 401)
+        self.assertEqual(self.client.get("/v1/receipts/whatever").status_code, 401)
+        self.assertEqual(self.client.get("/v1/receipts/whatever/verify").status_code, 401)
+
+    def test_receipts_hide_other_tenants(self) -> None:
+        # B1: тенант видит только свои квитанции, чужие — 404.
+        audit = self.client.post(
+            "/v1/audit", json={"flow": LLM_FLOW}, headers=self._auth_headers
+        ).json()
+        registry_id = audit["registry_id"]
+
+        signup = self.client.post(
+            "/v1/signup", json={"name": "Other Co"}
+        ).json()
+        other_headers = {"X-API-Key": signup["api_key"]}
+
+        listing = self.client.get("/v1/receipts", headers=other_headers).json()
+        self.assertEqual(listing["total"], 0)
+        self.assertEqual(listing["receipts"], [])
+
+        self.assertEqual(
+            self.client.get(f"/v1/receipts/{registry_id}", headers=other_headers).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(
+                f"/v1/receipts/{registry_id}/verify", headers=other_headers
+            ).status_code,
+            404,
+        )
+
+    def test_legacy_endpoints_require_authentication(self) -> None:
+        # B2/B3: evidence, policies, verifications, trust и history больше
+        # не отдают данные анонимно.
+        for path in (
+            "/v1/evidence",
+            "/v1/policies",
+            "/v1/verifications/whatever",
+            "/v1/agents/some-agent/trust",
+            "/v1/agents/some-agent/history",
+        ):
+            self.assertEqual(
+                self.client.get(path).status_code, 401, f"{path} must require auth"
+            )
 
 
 if __name__ == "__main__":
