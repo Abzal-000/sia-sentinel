@@ -22,7 +22,7 @@ periodic signed checkpoints.
 | **Code audits** | Prove a refactor (e.g. recursive → iterative) preserves behavior, then quantify compute savings |
 | **LLM flow audits** | Replay a prompt dataset through old/new model configs; equivalence via Wilson CI on pass-rate, savings from token pricing |
 | **Savings Autopilot** | Screen a model catalog (by tier/pricing), find the cheapest config that preserves quality, then prove it with a full final audit |
-| **TrustChain ledger** | Append-only hash chain of all receipts, signed checkpoints, tamper detection, public attestations + embeddable SVG badges |
+| **TrustChain ledger** | Append-only hash chain + RFC 6962 Merkle tree over all receipts: signed tree heads, inclusion/consistency proofs, key rotation (`kid`), external checkpoint anchoring, tamper detection, public attestations + SVG badges |
 | **Multi-tenant SaaS** | Tenant isolation for jobs/receipts/invoices, RBAC (API keys + JWT), usage metering |
 | **Billing** | Plans with monthly quotas (hard cap on free, billed overage on paid), invoice generation per period |
 
@@ -51,7 +51,9 @@ system can independently verify a savings claim without trusting the service.
 - **Independent verifier:** [`sia-verifier`](verifier/) — a standalone package
   (`pip install sia-verifier`, single dependency: `cryptography`) that verifies
   any attestation **without trusting the auditor**: Ed25519 receipt signature,
-  claim consistency, TrustChain hash chain, checkpoints. No network calls.
+  claim consistency, TrustChain hash chain, checkpoints, Merkle
+  inclusion/consistency proofs, and the `kid` → key table reconstructed from
+  the chain (key rotation). No network calls.
 
   ```bash
   sia-verifier attestation.json --chain registry.jsonl
@@ -93,7 +95,7 @@ python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activa
 pip install -r requirements.txt
 
 uvicorn sentinel.api:app --reload                 # API on http://localhost:8000
-python -m unittest discover -s tests              # run the test suite
+python -m unittest discover -s tests -t .         # run the test suite (state-isolated)
 ```
 
 Interactive docs: `http://localhost:8000/docs`
@@ -160,9 +162,15 @@ Tenant admins cannot see other tenants or change plans.
 | `GET /v1/audits/{id}` | user | Job status (tenant-isolated) |
 | `POST /v1/optimize` | user | Savings Autopilot run (async) |
 | `GET /v1/optimize/{id}` | user | Optimization status |
-| `GET /v1/receipts` / `GET /v1/receipts/{id}` | public | Receipt registry |
-| `GET /v1/ledger/head` / `GET /v1/ledger/verify` | public | TrustChain state / full chain verification |
-| `POST /v1/ledger/checkpoint` | platform admin | Anchor a signed checkpoint |
+| `GET /v1/receipts` / `GET /v1/receipts/{id}` | user | Receipt registry (tenant sees only its own receipts) |
+| `GET /v1/ledger/head` | public | Chain head + Merkle tree head (`tree_size`, `root_hash`) |
+| `GET /v1/ledger/verify` | public | Chain verification (incremental; `?full=true` from genesis) |
+| `GET /v1/ledger/inclusion/{id}` | public | Merkle inclusion proof for an entry (RFC 6962) |
+| `GET /v1/ledger/consistency?from=&to=` | public | Merkle consistency proof between two tree heads |
+| `GET /v1/ledger/keys` | public | Key declarations (`kid` → public key history) |
+| `POST /v1/ledger/checkpoint` | platform admin | Sign a checkpoint (chain + tree head) |
+| `POST /v1/ledger/anchor` | platform admin | Checkpoint + publication to external anchor storage |
+| `POST /v1/ledger/keys/rotate` | platform admin | Rotate the signing key (declared in the chain) |
 | `GET /v1/attestations/{id}` | public | Portable attestation document |
 | `GET /v1/attestations` | public | Public registry (opt-in tenants only) |
 | `GET /v1/attestations/{id}/badge.svg` | public | Embeddable "verified savings" badge |

@@ -1,6 +1,6 @@
 [project]
 name = "sia-sentinel"
-version = "0.6.0"
+version = "0.7.0"
 description = "Proof-of-Savings: neutral AI efficiency auditor with cryptographically verifiable savings receipts"
 readme = "README.md"
 requires-python = ">=3.11"

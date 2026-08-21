@@ -83,7 +83,21 @@ BLOCKER and HIGH findings are fixed; each fix is covered by regression tests.
 - **Demo login** (`ENABLE_DEMO_LOGIN=1`) uses fixed credentials; it is disabled by default and must never be enabled in production.
 - **Rate limiting** is in-memory per process; use Redis-backed limiting for multi-instance deployments.
 - **JWT** does not yet validate `iss`/`aud` claims (single-issuer deployment assumed).
-- **Secret rotation:** any signing keys used before the H2 fix should be rotated, since the old fallback could have accepted secret material in place of a public key.
+- **Incremental chain verification** trusts the prefix verified earlier in the same process; `GET /v1/ledger/verify?full=true` re-verifies from genesis — run it (and compare against an external anchor) periodically.
+- **HTTP anchor transport** does not verify what the remote endpoint stored; the guarantee comes from the external medium's immutability policy (WORM/object lock), not the POST.
+
+### External audit remediation (2026-08, 31 items — all closed)
+
+Second-pass external audit (sections A–E: statistics, registry access, chain
+integrity, operations, product hygiene) fully remediated:
+
+| Group | What was done |
+|---|---|
+| A1–A6 (statistics) | Paired statistics for the code path (McNemar, Newcombe CI, non-inferiority with `delta`, MDD), CI-aware optimizer screening, Holm-Bonferroni multiplicity correction, honest simulation, paired stats + preregistration published in attestations, SDK preregistration lifecycle |
+| B1–B4 (registry access) | `GET /v1/receipts` requires auth and is tenant-isolated; legacy endpoints gated by RBAC; billing accepts explicit `tenant_id` for platform admins |
+| C1–C4 (chain integrity) | RFC 6962 Merkle accumulator with inclusion/consistency proofs and signed tree heads; incremental chain verification with anchor-checked cache; key rotation via `kid` + chain-declared keys; external checkpoint anchoring (file + HTTP transports) |
+| D1–D14 (operations) | Working Makefile; full ruff+mypy in CI; tenant-isolated receipts; atomic state writes + crash-safe torn-tail ledger recovery; null-byte/control-char JSON validation in middleware; `X-Forwarded-For` only with `TRUST_PROXY=1`; SSRF guard on webhooks (subscribe + delivery); FastAPI metadata; compose volumes for all runtime state; fully state-isolated test suite (`discover -t .`) |
+| E1–E7 (hygiene) | Positioning texts fixed; placeholder domains annotated; dated model pricing (`prices_as_of`, `catalog_version`) in manifests/commitments; simulated-mode caveats; RCE claim refuted — `kind=code` is CLI-only, blocked at all API endpoints |
 
 ---
 
@@ -93,23 +107,33 @@ BLOCKER and HIGH findings are fixed; each fix is covered by regression tests.
 - `kind=code` and `*_file` keys rejected at the API boundary (`validate_api_flow`)
 - CLI file access confined to the flow's base directory (`_safe_join`)
 - XSS/SQLi pattern detection, length limits, null-byte sanitization on free-text fields
+- Middleware JSON-body validation: null bytes and control characters rejected in any string field (universally unsafe content only — code fields legitimately contain `import`/`exec`, so dangerous-pattern matching stays endpoint-level)
 
 ### Authentication & authorization
 - JWT (HS256, 24 h expiry) + API-key authentication
 - RBAC: `ADMIN` / `VERIFIER` / `USER` / `ANONYMOUS`
 - Platform-admin split: tenant admins cannot touch other tenants or platform ops
 - Constant-time key comparison (`hmac.compare_digest`)
+- Receipt registry tenant-isolated; anonymous access limited to published attestations and proof material
 
 ### Cryptography
-- Ed25519 receipts; `receipt_id` + manifest covered by the signature
-- TrustChain: append-only JSONL hash chain + signed checkpoints
+- Ed25519 receipts; `receipt_id` + manifest + `kid` covered by the signature
+- TrustChain: append-only JSONL hash chain + RFC 6962 Merkle tree with signed tree heads, inclusion/consistency proofs, and checkpoints (protocol v2 covers the tree head)
+- Key rotation: `kid`-identified keys declared as chain entries signed by the active key; verifier reconstructs the `kid` → key table from the ledger alone
 - HMAC-SHA256 outbound webhook signatures; GitHub webhook HMAC verification (fail-closed)
 - Public key published at `/v1/receipt-public-key`; verification requires no secret
+- External checkpoint anchoring (`/v1/ledger/anchor`, `scripts/anchor_checkpoint.py`) — file staging + HTTP transport for immutable external storage
+
+### Network
+- SSRF guard on webhook and anchor URLs: hostname resolution checked against private/loopback/link-local/reserved ranges (incl. cloud metadata `169.254.169.254`), enforced at subscription and at delivery (DNS-rebinding re-check)
+- `X-Forwarded-For` honoured only when `TRUST_PROXY=1` (anti-spoofing for direct deployments)
+- CORS origins configurable via `CORS_ALLOW_ORIGINS`; security headers on all responses
 
 ### Availability
 - Persistent job queue with crash recovery
 - Benchmark isolation in a killable child process
-- Atomic persistence for keys/registry state
+- Atomic persistence for keys/registry state (`mkstemp` + `fsync` + `os.replace`)
+- Crash-safe ledger: durable single-line appends (`fsync`), torn trailing line detected/dropped/logged and physically truncated before the next append
 
 ---
 
@@ -130,7 +154,10 @@ BLOCKER and HIGH findings are fixed; each fix is covered by regression tests.
 
 ## 5. Verification
 
-- Full test suite: `python -m unittest discover -s tests` (see `artifacts/security_test_report.md` for the auto-generated security-test breakdown).
-- Penetration suite: `python -m unittest tests.security.test_penetration -v`.
-- Independent receipt verification is exercised end-to-end in
-  `tests/test_cryptographic_receipts.py` and `tests/test_receipt_registry.py`.
+- Full test suite: `python -m unittest discover -s tests -t .` (the `-t .` flag
+  activates full state isolation — see `tests/__init__.py`; the penetration
+  suite is included in discovery).
+- Penetration suite alone: `python -m unittest tests.security.test_penetration -v`.
+- Independent receipt/proof verification is exercised end-to-end in
+  `tests/test_cryptographic_receipts.py`, `tests/test_receipt_registry.py` and
+  `tests/test_sia_verifier.py` (including Merkle proofs and key rotation).

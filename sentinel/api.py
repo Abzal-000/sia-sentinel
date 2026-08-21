@@ -78,7 +78,7 @@ app = FastAPI(
         "verifiable Ed25519 attestations anchored in a tamper-evident ledger. "
         "Spec: docs/attestation-spec.md (sia-attestation/1)."
     ),
-    version="0.6.0",
+    version="0.7.0",
 )
 # Setup CORS
 setup_cors(app)
