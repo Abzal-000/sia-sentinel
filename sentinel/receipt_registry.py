@@ -28,18 +28,23 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import json
+import logging
 import os
 import sys
+import tempfile
 import threading
 import uuid
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .atomic_write import append_line_durable
 from .cryptographic_receipts import (
     CryptographicReceipt,
     ReceiptGenerator,
     ReceiptVerifier,
 )
+
+logger = logging.getLogger(__name__)
 
 GENESIS_HASH = "0" * 64
 CHECKPOINT_PROTOCOL = "trustchain-checkpoint/1"
@@ -110,6 +115,48 @@ def _entry_hash(seq: int, prev_hash: str, entry: dict[str, Any]) -> str:
     return hashlib.sha256(_canonical_json(payload)).hexdigest()
 
 
+def _read_jsonl_tolerant(path: Path) -> list[dict[str, Any]]:
+    """Читает JSONL-леджер, переживая крах посреди записи (D8).
+
+    Повреждённая последняя строка (torn write) отбрасывается с
+    предупреждением — цепочка остаётся целой. Битая строка в середине
+    файла — признак внешнего вмешательства: она пропускается с ошибкой
+    в лог, разрыв обнаружит verify_chain.
+    """
+    if not path.exists():
+        return []
+
+    with open(path, "r", encoding="utf-8") as handle:
+        raw_lines = handle.read().split("\n")
+
+    entries: list[dict[str, Any]] = []
+
+    for index, line in enumerate(raw_lines):
+        if not line.strip():
+            continue
+
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            trailing = not any(item.strip() for item in raw_lines[index + 1:])
+
+            if trailing:
+                logger.warning(
+                    "%s: dropping corrupt trailing line %d (torn write from a crash)",
+                    path,
+                    index + 1,
+                )
+            else:
+                logger.error(
+                    "%s: corrupt line %d in the middle of the ledger — "
+                    "chain verification will report a break",
+                    path,
+                    index + 1,
+                )
+
+    return entries
+
+
 class ReceiptRegistry:
     """Append-only журнал квитанций с хеш-цепочкой и чекпоинтами."""
 
@@ -133,6 +180,7 @@ class ReceiptRegistry:
         registered_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
 
         with self._lock, _FileLock(self._file_lock_path):
+            self._drop_torn_tail_unlocked()
             head = self._head_unlocked()
             seq = head["seq"] + 1 if head else 1
             prev_hash = head["entry_hash"] if head else GENESIS_HASH
@@ -147,8 +195,7 @@ class ReceiptRegistry:
             }
             entry["entry_hash"] = _entry_hash(seq, prev_hash, entry)
 
-            with open(self.registry_file, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry, default=str) + "\n")
+            append_line_durable(self.registry_file, json.dumps(entry, default=str))
 
         return registry_id
 
@@ -168,6 +215,7 @@ class ReceiptRegistry:
         registered_at = _dt.datetime.now(_dt.timezone.utc).isoformat()
 
         with self._lock, _FileLock(self._file_lock_path):
+            self._drop_torn_tail_unlocked()
             head = self._head_unlocked()
             seq = head["seq"] + 1 if head else 1
             prev_hash = head["entry_hash"] if head else GENESIS_HASH
@@ -185,8 +233,7 @@ class ReceiptRegistry:
             }
             entry["entry_hash"] = _entry_hash(seq, prev_hash, entry)
 
-            with open(self.registry_file, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(entry, default=str) + "\n")
+            append_line_durable(self.registry_file, json.dumps(entry, default=str))
 
         return registry_id
 
@@ -259,24 +306,66 @@ class ReceiptRegistry:
     # === Чтение ===
 
     def _load_entries(self) -> list[dict[str, Any]]:
-        if not self.registry_file.exists():
-            return []
+        return _read_jsonl_tolerant(self.registry_file)
 
-        entries: list[dict[str, Any]] = []
+    def _drop_torn_tail_unlocked(self) -> None:
+        """Физически удаляет битую последнюю строку журнала (D8).
+
+        Вызывается под блокировками перед append: если прошлый процесс
+        упал посреди записи, неполная строка отбрасывается, чтобы новая
+        запись легла на чистый конец файла. Вызывать только под
+        self._lock + _FileLock.
+        """
+        if not self.registry_file.exists():
+            return
 
         with open(self.registry_file, "r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
+            raw_lines = handle.read().split("\n")
 
-                if not line:
-                    continue
+        # Ищем последнюю непустую строку
+        last_index = None
 
-                try:
-                    entries.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
+        for index in range(len(raw_lines) - 1, -1, -1):
+            if raw_lines[index].strip():
+                last_index = index
+                break
 
-        return entries
+        if last_index is None:
+            return
+
+        try:
+            json.loads(raw_lines[last_index])
+            return  # последняя строка валидна — чинить нечего
+        except json.JSONDecodeError:
+            pass
+
+        logger.warning(
+            "%s: truncating corrupt trailing line %d before append (torn write)",
+            self.registry_file,
+            last_index + 1,
+        )
+
+        kept = raw_lines[:last_index]
+        content = "\n".join(kept) + ("\n" if kept else "")
+
+        # Атомарная перезапись: временный файл + fsync + os.replace
+        fd, tmp_path = tempfile.mkstemp(
+            dir=str(self.storage_dir), prefix=".registry.", suffix=".tmp"
+        )
+
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(content)
+                handle.flush()
+                os.fsync(handle.fileno())
+
+            os.replace(tmp_path, self.registry_file)
+        except BaseException:
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
 
     def get(self, registry_id: str) -> Optional[dict[str, Any]]:
         """Возвращает полную запись по идентификатору."""
@@ -508,24 +597,7 @@ class ReceiptRegistry:
     # === Чекпоинты (якорение головы цепочки) ===
 
     def _load_checkpoints(self) -> list[dict[str, Any]]:
-        if not self.checkpoint_file.exists():
-            return []
-
-        checkpoints: list[dict[str, Any]] = []
-
-        with open(self.checkpoint_file, "r", encoding="utf-8") as handle:
-            for line in handle:
-                line = line.strip()
-
-                if not line:
-                    continue
-
-                try:
-                    checkpoints.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue
-
-        return checkpoints
+        return _read_jsonl_tolerant(self.checkpoint_file)
 
     def create_checkpoint(self, generator: ReceiptGenerator) -> Optional[dict[str, Any]]:
         """Подписывает текущую голову цепочки и сохраняет чекпоинт.
@@ -551,8 +623,7 @@ class ReceiptRegistry:
                 _checkpoint_commitment(checkpoint)
             )
 
-            with open(self.checkpoint_file, "a", encoding="utf-8") as handle:
-                handle.write(json.dumps(checkpoint, default=str) + "\n")
+            append_line_durable(self.checkpoint_file, json.dumps(checkpoint, default=str))
 
         return checkpoint
 

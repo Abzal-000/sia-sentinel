@@ -175,6 +175,10 @@ class AuditJobsAPITestCase(unittest.TestCase):
         status = self.client.get(f"/v1/audits/{audit_id}")
         self.assertEqual(status.status_code, 401)
 
+        # Дожидаемся завершения фонового джоба, чтобы он отпустил файловые
+        # блокировки до tearDown (иначе Windows не сможет удалить temp-каталог)
+        self._wait_for_terminal_status(audit_id)
+
 
 if __name__ == "__main__":
     unittest.main()

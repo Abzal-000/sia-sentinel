@@ -16,6 +16,8 @@ import os
 import re
 import threading
 import uuid
+
+from .atomic_write import atomic_write_json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -82,9 +84,7 @@ class TenantManager:
 
     def _save(self) -> None:
         data = {"tenants": [t.to_dict() for t in self.tenants.values()]}
-
-        with open(self.tenants_file, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2)
+        atomic_write_json(self.tenants_file, data)
 
     def _ensure_default(self) -> None:
         if DEFAULT_TENANT_ID not in self.tenants:

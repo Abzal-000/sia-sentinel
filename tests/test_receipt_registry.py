@@ -217,5 +217,101 @@ class ReceiptChainTestCase(unittest.TestCase):
         self.assertEqual(reopened.latest_checkpoint()["seq"], 3)
 
 
+class CrashSafetyTestCase(unittest.TestCase):
+    """D8: падение процесса посреди записи не повреждает цепочку."""
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.storage_dir = str(Path(self._tmp.name) / "receipts")
+
+        self.generator = ReceiptGenerator("crash-test-key")
+        self.verifier = ReceiptVerifier(self.generator.get_public_key())
+        self.registry = ReceiptRegistry(self.storage_dir)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _make_receipt(self, name: str):
+        return self.generator.generate_receipt(
+            evidence_id=f"evidence-{name}",
+            code=f"# code for {name}",
+            safety_approved=True,
+            trust_level="JUNIOR",
+        )
+
+    def _registry_file(self) -> Path:
+        return Path(self.storage_dir) / "registry.jsonl"
+
+    def test_torn_trailing_line_is_dropped_on_read(self) -> None:
+        self.registry.register(self._make_receipt("good"))
+
+        # Имитация краха: неполная строка в конце файла
+        with open(self._registry_file(), "a", encoding="utf-8") as handle:
+            handle.write('{"seq": 2, "prev_hash": "abc", "registry_id": "torn')
+
+        # Чтение переживает битую последнюю строку
+        self.assertEqual(self.registry.count(), 1)
+        self.assertTrue(self.registry.verify_chain()["valid"])
+
+    def test_append_after_crash_repairs_and_continues_chain(self) -> None:
+        self.registry.register(self._make_receipt("before-crash"))
+
+        with open(self._registry_file(), "a", encoding="utf-8") as handle:
+            handle.write('{"seq": 2, "prev_hash": "abc", "registry_id": "torn')
+
+        # Новая запись отбрасывает обрывок и продолжает цепочку
+        self.registry.register(self._make_receipt("after-crash"))
+
+        self.assertEqual(self.registry.count(), 2)
+
+        result = self.registry.verify_chain()
+        self.assertTrue(result["valid"])
+        self.assertEqual(result["entries"], 2)
+
+        # Вторая запись ссылается на хеш первой, а не на обрывок
+        lines = [
+            line for line in
+            self._registry_file().read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        first = json.loads(lines[0])
+        second = json.loads(lines[1])
+        self.assertEqual(second["prev_hash"], first["entry_hash"])
+        self.assertEqual(second["seq"], 2)
+
+    def test_corrupt_middle_line_is_flagged_not_silently_dropped(self) -> None:
+        for name in ("one", "two", "three"):
+            self.registry.register(self._make_receipt(name))
+
+        lines = self._registry_file().read_text(encoding="utf-8").splitlines()
+        lines[1] = "NOT-JSON-CORRUPTED-MIDDLE"
+        self._registry_file().write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        with self.assertLogs("sentinel.receipt_registry", level="ERROR") as captured:
+            entries = self.registry._load_entries()
+
+        self.assertEqual(len(entries), 2)  # битая средняя строка пропущена
+        self.assertTrue(
+            any("middle of the ledger" in message for message in captured.output)
+        )
+
+        # Разрыв виден проверке цепочки
+        result = self.registry.verify_chain()
+        self.assertFalse(result["valid"])
+
+    def test_checkpoint_file_survives_torn_write(self) -> None:
+        self.registry.register(self._make_receipt("seed"))
+        self.registry.create_checkpoint(self.generator)
+
+        checkpoint_file = Path(self.storage_dir) / "checkpoints.jsonl"
+        with open(checkpoint_file, "a", encoding="utf-8") as handle:
+            handle.write('{"protocol": "trustchain-checkpoint/1", "seq": 99')
+
+        checkpoints = self.registry.list_checkpoints()
+
+        self.assertEqual(len(checkpoints), 1)
+        self.assertEqual(checkpoints[0]["seq"], 1)
+
+
 if __name__ == "__main__":
     unittest.main()

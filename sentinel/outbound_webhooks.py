@@ -26,6 +26,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .atomic_write import atomic_write_json
+
 logger = logging.getLogger(__name__)
 
 EVENT_AUDIT_COMPLETED = "audit.completed"
@@ -247,6 +249,4 @@ class OutboundWebhookDispatcher:
                 s.to_dict(include_secret=True) for s in self._subscriptions.values()
             ]
         }
-
-        with open(self.subscriptions_file, "w", encoding="utf-8") as handle:
-            json.dump(data, handle, indent=2)
+        atomic_write_json(self.subscriptions_file, data)

@@ -67,9 +67,15 @@ if not RECEIPT_SIGNING_KEY:
 receipt_generator = ReceiptGenerator(RECEIPT_SIGNING_KEY)
 receipt_verifier = ReceiptVerifier(receipt_generator.get_public_key())
 app = FastAPI(
-
-
-
+    title="SIA Sentinel",
+    description=(
+        "Proof-of-Savings Protocol: neutral AI efficiency auditor. "
+        "Replays workloads against cheaper configurations, proves quality "
+        "equivalence with paired statistics, and issues independently "
+        "verifiable Ed25519 attestations anchored in a tamper-evident ledger. "
+        "Spec: docs/attestation-spec.md (sia-attestation/1)."
+    ),
+    version="0.6.0",
 )
 # Setup CORS
 setup_cors(app)
@@ -117,17 +123,6 @@ class TrustInfoResponse(BaseModel):
     success_streak: int
     failure_streak: int
     last_failure_reason: Optional[str]
-
-
-    def _safe_agent_id(self, agent_id: str) -> str:
-        """Sanitize agent_id for file system."""
-        # Remove null bytes, control characters, and dangerous symbols
-        safe = "".join(
-            c if c.isalnum() or c in "-_" else "_"
-            for c in agent_id
-            if ord(c) >= 32 and c not in '<>:"/\\|?*'
-        )
-        return safe or "unknown_agent"
 
 
 def _get_trust_manager(agent_id: str) -> TrustLevelManager:

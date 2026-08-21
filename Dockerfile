@@ -36,7 +36,6 @@ ENV PATH="/opt/venv/bin:$PATH"
 COPY sia/ ./sia/
 COPY sentinel/ ./sentinel/
 COPY dashboard/ ./dashboard/
-COPY tests/ ./tests/
 COPY policies/ ./policies/
 
 RUN useradd -m -u 1000 siauser && \

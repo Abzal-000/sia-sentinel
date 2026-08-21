@@ -197,6 +197,17 @@ class TenantAPITestCase(unittest.TestCase):
         status = self.client.get(f"/v1/audits/{audit_id}", headers=globex_headers)
         self.assertEqual(status.status_code, 404)
 
+        # Дожидаемся завершения фонового джоба, чтобы он отпустил файловые
+        # блокировки до tearDown (иначе Windows не сможет удалить temp-каталог)
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            snapshot = self.client.get(
+                f"/v1/audits/{audit_id}", headers=acme_headers
+            ).json()
+            if snapshot["status"] in ("completed", "failed"):
+                break
+            time.sleep(0.05)
+
     def test_usage_summary_counts_tenant_audits(self) -> None:
         self.client.post(
             "/v1/tenants", json={"name": "Acme", "tenant_id": "acme"},
