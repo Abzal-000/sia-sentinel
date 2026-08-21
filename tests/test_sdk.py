@@ -305,6 +305,30 @@ class SDKTestCase(unittest.TestCase):
                 client._get("/v1/tenants")
             self.assertEqual(ctx.exception.status_code, 403)
 
+    def test_preregistration_lifecycle(self) -> None:
+        # A6: SDK покрывает предрегистрацию (commitment до прогона).
+        with self._client() as client:
+            prereg = client.create_preregistration(LLM_FLOW)
+            self.assertIn("preregistration_id", prereg)
+            self.assertIn("commitment", prereg)
+
+            prereg_id = prereg["preregistration_id"]
+
+            fetched = client.get_preregistration(prereg_id)
+            self.assertEqual(fetched["preregistration_id"], prereg_id)
+            self.assertEqual(
+                fetched["commitment"]["dataset_sha256"],
+                prereg["commitment"]["dataset_sha256"],
+            )
+
+            # Запускаем аудит и проверяем связь предрегистрации с квитанцией
+            audit = client.run_audit(LLM_FLOW)
+            registry_id = audit["registry_id"]
+
+            link = client.verify_preregistration_link(prereg_id, registry_id)
+            self.assertTrue(link["valid"])
+            self.assertIsNone(link["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

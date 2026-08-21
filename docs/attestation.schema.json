@@ -47,7 +47,31 @@
       "additionalProperties": false,
       "properties": {
         "savings_verified": { "type": ["boolean", "null"] },
-        "savings_ratio": { "type": ["number", "null"] }
+        "savings_ratio": { "type": ["number", "null"] },
+        "paired": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "non_inferior": { "type": ["boolean", "null"] },
+            "delta": { "type": ["number", "null"] },
+            "mcnemar_p": { "type": ["number", "null"] },
+            "minimum_detectable_difference": { "type": ["number", "null"] },
+            "n_pairs": { "type": ["integer", "null"] },
+            "b_old_pass_new_fail": { "type": ["integer", "null"] },
+            "c_old_fail_new_pass": { "type": ["integer", "null"] },
+            "ci_lower": { "type": ["number", "null"] },
+            "ci_upper": { "type": ["number", "null"] }
+          }
+        },
+        "preregistration": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "properties": {
+            "dataset_sha256": { "type": ["string", "null"] },
+            "delta": { "type": ["number", "null"] },
+            "metric": { "type": ["string", "null"] }
+          }
+        }
       }
     },
     "receipt": {

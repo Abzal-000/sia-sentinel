@@ -27,6 +27,12 @@ class ModelSpec:
     tier: str = "mid"
     context_window: Optional[int] = None
     tags: tuple[str, ...] = ()
+    # E5: датировка цен. Тарифы попадают в подписанный манифест/коммитмент,
+    # но без даты экономию нельзя перепроверить против «какие цены были в
+    # тот день». prices_as_of — ISO-дата актуальности тарифов,
+    # catalog_version — версия каталога/источника цен.
+    prices_as_of: Optional[str] = None
+    catalog_version: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.tier not in TIERS:
@@ -51,6 +57,8 @@ class ModelSpec:
             "tier": self.tier,
             "context_window": self.context_window,
             "tags": list(self.tags),
+            "prices_as_of": self.prices_as_of,
+            "catalog_version": self.catalog_version,
         }
 
     @classmethod
@@ -65,6 +73,8 @@ class ModelSpec:
             tier=data.get("tier", "mid"),
             context_window=data.get("context_window"),
             tags=tuple(data.get("tags", ())),
+            prices_as_of=data.get("prices_as_of"),
+            catalog_version=data.get("catalog_version"),
         )
 
 
@@ -124,7 +134,13 @@ class ModelCatalog:
 
     @classmethod
     def from_json(cls, path: str | Path) -> "ModelCatalog":
-        """Загрузка каталога из JSON: {"models": [ {...}, ... ]}."""
+        """Загрузка каталога из JSON.
+
+        Формат: {"models": [ {...}, ... ]} с опциональными глобальными
+        полями "prices_as_of" (ISO-дата актуальности тарифов) и
+        "catalog_version" — они применяются к каждой модели, у которой
+        нет собственных значений (E5).
+        """
         with open(path, "r", encoding="utf-8-sig") as handle:
             data = json.load(handle)
 
@@ -133,4 +149,14 @@ class ModelCatalog:
         if not isinstance(models, list) or not models:
             raise ValueError(f"Catalog file must contain a non-empty 'models' list: {path}")
 
-        return cls([ModelSpec.from_dict(item) for item in models])
+        global_prices_as_of = data.get("prices_as_of")
+        global_catalog_version = data.get("catalog_version")
+
+        specs = []
+        for item in models:
+            item = dict(item)
+            item.setdefault("prices_as_of", global_prices_as_of)
+            item.setdefault("catalog_version", global_catalog_version)
+            specs.append(ModelSpec.from_dict(item))
+
+        return cls(specs)

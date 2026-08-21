@@ -59,6 +59,8 @@ def spec_to_endpoint(spec: ModelSpec) -> LLMEndpointConfig:
         base_url=spec.base_url,
         api_key=api_key,
         profile=simulated_profile,
+        prices_as_of=spec.prices_as_of,
+        catalog_version=spec.catalog_version,
     )
 
 

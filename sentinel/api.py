@@ -534,6 +534,41 @@ class AuditRequest(BaseModel):
     )
 
 
+def _extract_paired_stats(report: dict[str, Any]) -> dict[str, Any]:
+    """A5: компактная парная статистика вердикта для metadata аттестации.
+
+    Разные kind несут парный блок в разных местах отчёта:
+    llm_flow — equivalence.paired, code — paired, optimize — в финальном
+    аудите лучшего кандидата.
+    """
+    paired: Optional[dict[str, Any]] = None
+
+    if report.get("kind") == "optimize":
+        best = (report.get("manifest") or {}).get("best")
+        final_audits = report.get("final_audits") or {}
+        if best and best in final_audits:
+            paired = (final_audits[best].get("equivalence") or {}).get("paired")
+    elif report.get("kind") == "code":
+        paired = report.get("paired")
+    else:
+        paired = (report.get("equivalence") or {}).get("paired")
+
+    if not isinstance(paired, dict):
+        return {}
+
+    return {
+        "non_inferior": paired.get("non_inferior"),
+        "delta": paired.get("delta"),
+        "mcnemar_p": paired.get("mcnemar_p"),
+        "minimum_detectable_difference": paired.get("minimum_detectable_difference"),
+        "n_pairs": paired.get("n_pairs"),
+        "b_old_pass_new_fail": paired.get("b_old_pass_new_fail"),
+        "c_old_fail_new_pass": paired.get("c_old_fail_new_pass"),
+        "ci_lower": paired.get("ci_lower"),
+        "ci_upper": paired.get("ci_upper"),
+    }
+
+
 def _run_audit_and_register(
     flow: dict[str, Any],
     tenant_id: str = DEFAULT_TENANT_ID,
@@ -575,6 +610,12 @@ def _run_audit_and_register(
         metadata["dataset_sha256"] = prereg.get("dataset_sha256")
         metadata["delta"] = prereg.get("delta")
         metadata["metric"] = prereg.get("metric")
+
+    # A5: парная статистика (delta, mcnemar_p, MDD) публикуется в metadata,
+    # чтобы аттестация несла методологию вердикта, а не только итог.
+    paired = _extract_paired_stats(report)
+    if paired:
+        metadata["paired"] = paired
 
     registry_id = receipt_registry.register(receipt, metadata=metadata)
 
@@ -1347,6 +1388,22 @@ def _build_attestation(registry_id: str) -> dict[str, Any]:
     chain = receipt_registry.verify_chain()
     metadata = entry.get("metadata", {})
 
+    claim: dict[str, Any] = {
+        "savings_verified": metadata.get("savings_verified"),
+        "savings_ratio": metadata.get("savings_ratio"),
+    }
+
+    # A5: методология вердикта — парная статистика и предрегистрация —
+    # публикуется в аттестации, а не остаётся только в коде.
+    if metadata.get("paired"):
+        claim["paired"] = metadata.get("paired")
+    if metadata.get("delta") is not None or metadata.get("dataset_sha256"):
+        claim["preregistration"] = {
+            "dataset_sha256": metadata.get("dataset_sha256"),
+            "delta": metadata.get("delta"),
+            "metric": metadata.get("metric"),
+        }
+
     return {
         "schema_version": ATTESTATION_SCHEMA_VERSION,
         "spec": ATTESTATION_SPEC,
@@ -1362,10 +1419,7 @@ def _build_attestation(registry_id: str) -> dict[str, Any]:
             "kind": metadata.get("kind"),
             "mode": metadata.get("mode"),
         },
-        "claim": {
-            "savings_verified": metadata.get("savings_verified"),
-            "savings_ratio": metadata.get("savings_ratio"),
-        },
+        "claim": claim,
         "receipt": entry.get("receipt"),
         "verification": {
             "receipt_signature_valid": receipt_valid,

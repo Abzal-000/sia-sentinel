@@ -65,7 +65,7 @@ system can independently verify a savings claim without trusting the service.
   `POST /v1/tenants/{id}/settings` (`publish_attestations: true`); only opted-in
   records appear in `GET /v1/attestations`. Individual attestations stay
   reachable by id (badges link to them).
-- **Embed the badge:**
+- **Embed the badge:** (replace `sentinel.example.com` with your deployment domain)
 
   ```html
   <img src="https://sentinel.example.com/v1/attestations/{id}/badge.svg"
@@ -136,6 +136,7 @@ from sia_sentinel import SentinelClient
 
 # Creates the tenant (free plan) and returns a client holding its first
 # admin API key — shown once, store it securely.
+# Replace sentinel.example.com with your deployment domain.
 client = SentinelClient.signup("https://sentinel.example.com", "Acme Corp")
 client.run_audit(flow)
 

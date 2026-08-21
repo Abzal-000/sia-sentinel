@@ -58,6 +58,10 @@ class LLMEndpointConfig:
     # None — брать из профиля. Публичный параметр: попадает в манифест,
     # чтобы допущение о качестве в simulated-режиме было задекларировано.
     simulated_reliability: Optional[float] = None
+    # E5: датировка тарифов — попадает в манифест/коммитмент, чтобы
+    # заявленную экономию можно было перепроверить против цен того дня.
+    prices_as_of: Optional[str] = None
+    catalog_version: Optional[str] = None
 
     def resolve_pricing(self, defaults: PricingConfig) -> PricingConfig:
         return PricingConfig(
@@ -85,6 +89,8 @@ class LLMEndpointConfig:
             "profile": self.profile,
             "seed": self.seed,
             "simulated_reliability": self.simulated_reliability,
+            "prices_as_of": self.prices_as_of,
+            "catalog_version": self.catalog_version,
         }
 
 

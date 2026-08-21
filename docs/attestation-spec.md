@@ -26,10 +26,51 @@ Served at `GET /v1/attestations/{registry_id}` (public, no authentication).
 | `subject.mode` | string \| null | `simulated` \| `live`. |
 | `claim.savings_verified` | bool \| null | Whether the savings claim passed verification. |
 | `claim.savings_ratio` | number \| null | Verified savings ratio (0..1), when applicable. |
+| `claim.paired` | object \| null | Paired-statistics methodology behind the verdict (§1.1). |
+| `claim.preregistration` | object \| null | Preregistration commitment the run was checked against (§1.2). |
 | `receipt` | object | The signed cryptographic receipt (section 2). |
 | `verification.receipt_signature_valid` | bool \| null | Live signature check result. |
 | `verification.ledger_chain_valid` | bool | Live hash-chain check result. |
 | `verification.ledger_entries` | integer | Chain length at verification time. |
+
+### 1.1 Paired statistics (`claim.paired`)
+
+Quality preservation is decided by a **paired** test: the same dataset items
+(or test suite, for `kind=code`) run against both the old and the new
+configuration. The verdict methodology is published in the attestation:
+
+| Field | Type | Description |
+|---|---|---|
+| `non_inferior` | bool | Non-inferiority verdict: Newcombe CI lower bound for `p_new − p_old` > `−delta`. |
+| `delta` | number | Pre-declared non-inferiority margin (0 = no quality drop tolerated; default for deterministic code suites). |
+| `mcnemar_p` | number | Exact McNemar two-sided p-value on discordant pairs. |
+| `minimum_detectable_difference` | number | MDD at n pairs, α = 1−confidence, 80% power: the smallest quality drop this audit could have noticed. |
+| `n_pairs` | integer | Number of paired observations. |
+| `b_old_pass_new_fail` | integer | Discordant pairs where old passed and new failed. |
+| `c_old_fail_new_pass` | integer | Discordant pairs where old failed and new passed. |
+| `ci_lower`, `ci_upper` | number | Newcombe hybrid score interval for `p_new − p_old`. |
+
+`savings_verified` requires quality preservation — `non_inferior = true`, or
+zero discordance (`b = c = 0`, observed quality identical; the claim remains
+honest given the published MDD) — **and** positive savings.
+
+### 1.2 Preregistration (`claim.preregistration`)
+
+For `llm_flow`/`optimize` flows the audit parameters are committed to the
+ledger **before** the run (`POST /v1/preregistrations`, protocol
+`sia-preregistration/1`), clinical-trial style: no post-hoc dataset swaps or
+delta shopping. The attestation carries the commitment it was checked
+against:
+
+| Field | Type | Description |
+|---|---|---|
+| `dataset_sha256` | string | SHA-256 of the dataset (`prompt\|expect_contains` lines). |
+| `delta` | number | The non-inferiority margin declared pre-run. |
+| `metric` | string | Quality metric, currently `"expect_contains"`. |
+
+The ledger entry ordering (preregistration `seq` < receipt `seq`) and the
+commitment match are checkable via
+`GET /v1/preregistrations/{id}/verify/{registry_id}`.
 
 **Access model.** Individual attestations are public by design: badges and
 external verifiers link to them by id, so *knowing the id grants read access*.
@@ -130,6 +171,9 @@ medium pins the ledger state at a point in time.
 | `GET /v1/attestations/{id}/badge.svg` | Embeddable verified-savings badge. |
 | `GET /attestations/{id}` | Human verification portal (HTML). |
 | `GET /registry` | Public index of opted-in attestations (HTML). |
+| `POST /v1/preregistrations` | Commit audit parameters (dataset hash, delta, metric, endpoints) to the ledger **before** running the audit. Authenticated. |
+| `GET /v1/preregistrations/{id}` | Fetch a preregistration commitment. Authenticated. |
+| `GET /v1/preregistrations/{id}/verify/{registry_id}` | Check that a receipt entry was committed after the preregistration and matches its `dataset_sha256`/`delta`/`metric`. Authenticated. |
 
 ## 5. Notes and limitations
 

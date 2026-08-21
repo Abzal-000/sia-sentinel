@@ -1,5 +1,7 @@
 {
-  "_note": "Seed catalog for Savings Autopilot. Prices are conservative mid-2026 references in USD per 1M tokens — edit for your actual provider contracts. api_key_env names an environment variable; the key itself never lives here.",
+  "_note": "Seed catalog for Savings Autopilot. Prices are conservative mid-2026 references in USD per 1M tokens — edit for your actual provider contracts. api_key_env names an environment variable; the key itself never lives here. prices_as_of dates the pricing snapshot so claimed savings can be re-checked against the prices of that day; catalog_version identifies the pricing revision.",
+  "prices_as_of": "2026-08-01",
+  "catalog_version": "2026.08",
   "models": [
     {
       "model_name": "meta/llama-3.3-70b-instruct",

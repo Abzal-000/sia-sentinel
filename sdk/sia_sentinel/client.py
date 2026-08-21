@@ -143,6 +143,35 @@ class SentinelClient:
             lambda: self.get_optimization(audit_id), timeout, poll_interval
         )
 
+    # === Предрегистрация (preregistration) ===
+
+    def create_preregistration(self, flow: dict[str, Any]) -> dict[str, Any]:
+        """Зафиксировать параметры аудита в цепочке ДО прогона.
+
+        POST /v1/preregistrations -> {preregistration_id, commitment}.
+        Коммитмент (dataset_sha256, delta, metric, конфигурации эндпоинтов)
+        записывается в TrustChain до запуска аудита — клинико-испытательская
+        предрегистрация против подбора delta и подмены датасета постфактум.
+        """
+        return self._post("/v1/preregistrations", json={"flow": flow})
+
+    def get_preregistration(self, preregistration_id: str) -> dict[str, Any]:
+        """Получить коммитмент предрегистрации: GET /v1/preregistrations/{id}."""
+        return self._get(f"/v1/preregistrations/{preregistration_id}")
+
+    def verify_preregistration_link(
+        self, preregistration_id: str, registry_id: str
+    ) -> dict[str, Any]:
+        """Проверить связь предрегистрации с квитанцией.
+
+        GET /v1/preregistrations/{id}/verify/{registry_id}: подтверждает, что
+        запись квитанции закоммичена ПОСЛЕ предрегистрации и совпадает по
+        dataset_sha256/delta/metric.
+        """
+        return self._get(
+            f"/v1/preregistrations/{preregistration_id}/verify/{registry_id}"
+        )
+
     # === Квитанции и TrustChain ===
 
     def list_receipts(self, limit: int = 50, offset: int = 0) -> dict[str, Any]:

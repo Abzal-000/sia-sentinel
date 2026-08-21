@@ -319,6 +319,8 @@ def _endpoint_from_block(block: dict[str, Any]) -> LLMEndpointConfig:
         temperature=block.get("temperature", 0.0),
         profile=block.get("profile", "standard"),
         seed=block.get("seed", 42),
+        prices_as_of=block.get("prices_as_of"),
+        catalog_version=block.get("catalog_version"),
     )
 
 
