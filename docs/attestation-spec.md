@@ -154,10 +154,81 @@ content change breaks the chain. Entries predating the chain (no `entry_hash`)
 form a legacy prefix whose hashes are derived deterministically during
 verification; each receipt's own signature still guarantees its integrity.
 
-**Checkpoints** (`trustchain-checkpoint/1`): periodic signed commitments to the
-chain head `{protocol, checkpoint_id, created_at, seq, head_hash, registry_id}`
-(canonical JSON, Ed25519, base64). Publishing a checkpoint in an external
-medium pins the ledger state at a point in time.
+**Incremental verification**: `verify_chain()` caches the last verified
+position (seq + hash, in memory per process) and re-checks only new entries,
+plus an anchor check that the cached boundary entry still matches the cached
+hash — a rewritten prefix invalidates the cache and forces full re-verification.
+`GET /v1/ledger/verify?full=true` always verifies from genesis.
+
+**Checkpoints** (`trustchain-checkpoint/2`): periodic signed commitments to the
+chain head AND the Merkle tree head
+`{protocol, checkpoint_id, created_at, seq, head_hash, registry_id, tree_size, root_hash, kid}`
+(canonical JSON, Ed25519, base64). `kid` identifies the signing key (§3.2);
+legacy `trustchain-checkpoint/1` checkpoints (no tree head) remain verifiable.
+
+### 3.1 Merkle accumulator (RFC 6962-style)
+
+Every entry's `entry_hash` (legacy entries: derived hash) is a leaf of a Merkle
+tree over the ledger, in `seq` order. Hashing follows RFC 6962 §2.1 with
+domain separation:
+
+- leaf: `SHA256(0x00 || entry_hash)`
+- node: `SHA256(0x01 || left || right)`
+
+The **tree head** `{tree_size, root_hash}` covers every entry, so proofs
+against it bind individual receipts to the whole ledger state:
+
+- **Inclusion proof** (`GET /v1/ledger/inclusion/{registry_id}`): audit path
+  (list of `{hash, direction}` from leaf to root). Verified by folding:
+  start from `leaf_hash(entry_hash)`, combine `H(0x01 || sibling || fn)` for
+  `direction=left` (sibling on the left) or `H(0x01 || fn || sibling)` for
+  `direction=right`; the result must equal `root_hash` for the given
+  `tree_size`.
+- **Consistency proof** (`GET /v1/ledger/consistency?from=&to=`): RFC 6962
+  SUBPROOF proving that the tree of size `to` is an append-only extension of
+  the tree of size `from`. Verified by reconstructing BOTH roots from the
+  proof and comparing with the two known heads.
+
+Both proofs are verified by the standalone `sia-verifier` package
+(`verify_inclusion`, `verify_consistency`) — no trust in the auditor required.
+
+### 3.2 Key rotation (`kid`)
+
+Receipts and checkpoints carry a `kid` — a deterministic short fingerprint of
+the signing key (`SHA256(raw public key)[:16]` hex). `kid` is part of the
+signed commitment, so a signature is bound to a specific key.
+
+Key declarations are entries in the chain itself (`metadata.entry_type="key"`):
+`{kid, public_key, purpose, declared_at}` signed (Ed25519 over canonical JSON)
+by the key that was **active at declaration time** (`signer_kid`):
+
+- the genesis declaration is self-signed (the bootstrap key declares itself);
+- rotation declares the NEW key in a record signed by the OLD key, keeping an
+  unbroken chain of trust from the genesis key to the current one.
+
+A verifier reconstructs the `kid → public_key` table from the chain
+(`sia_verifier.verify_key_declarations`) and verifies any receipt or checkpoint
+against the key its `kid` names — receipts issued before a rotation stay
+verifiable after it. Rotation procedure: `POST /v1/ledger/keys/rotate`
+(platform admin) declares the new key and switches the active generator;
+persist the returned seed as the new `RECEIPT_SIGNING_KEY`.
+
+### 3.3 External checkpoint anchoring
+
+A checkpoint stored next to the ledger does not protect against an attacker
+who controls the server. Anchoring (`POST /v1/ledger/anchor`, admin;
+`scripts/anchor_checkpoint.py` for cron) publishes the signed checkpoint to
+external storage the auditor cannot rewrite:
+
+- **file transport**: `anchors/<checkpoint_id>.json` (`ANCHORS_DIR`), staged
+  for sync to immutable external storage (S3 with object lock / WORM bucket,
+  a public git remote, a gist feed);
+- **HTTP transport**: POST to `ANCHOR_URL` (e.g. a timestamping or
+  WORM-ingest service; SSRF-guarded — internal addresses are rejected).
+
+An auditor compares the externally anchored `{seq, head_hash, tree_size,
+root_hash}` with the live chain head: if the live head does not extend the
+anchor (consistency proof, §3.1), history was rewritten after the anchor.
 
 ## 4. Verification endpoints
 
@@ -165,9 +236,12 @@ medium pins the ledger state at a point in time.
 |---|---|
 | `GET /v1/attestations/{id}` | Full attestation document (this spec). |
 | `GET /v1/receipts/{id}/verify` | Machine-readable signature + chain verdict for one entry. |
-| `GET /v1/ledger/head` | Current chain head (`seq`, `entry_hash`). |
-| `GET /v1/ledger/verify` | Full chain verification. |
+| `GET /v1/ledger/head` | Current chain head + Merkle tree head (`seq`, `entry_hash`, `tree_size`, `root_hash`). |
+| `GET /v1/ledger/verify` | Chain verification (incremental by default; `?full=true` from genesis). |
+| `GET /v1/ledger/inclusion/{registry_id}` | Merkle inclusion proof for an entry (§3.1). |
+| `GET /v1/ledger/consistency?from=&to=` | Merkle consistency proof between two tree heads (§3.1). |
 | `GET /v1/ledger/checkpoints` | Signed checkpoints (newest first). |
+| `GET /v1/ledger/keys` | Key declarations from the chain (§3.2). |
 | `GET /v1/attestations/{id}/badge.svg` | Embeddable verified-savings badge. |
 | `GET /attestations/{id}` | Human verification portal (HTML). |
 | `GET /registry` | Public index of opted-in attestations (HTML). |
@@ -175,12 +249,21 @@ medium pins the ledger state at a point in time.
 | `GET /v1/preregistrations/{id}` | Fetch a preregistration commitment. Authenticated. |
 | `GET /v1/preregistrations/{id}/verify/{registry_id}` | Check that a receipt entry was committed after the preregistration and matches its `dataset_sha256`/`delta`/`metric`. Authenticated. |
 
+Admin-only ledger operations: `POST /v1/ledger/checkpoint` (sign a
+checkpoint), `POST /v1/ledger/anchor` (checkpoint + external publication,
+§3.3), `POST /v1/ledger/keys/rotate` (key rotation, §3.2).
+
 ## 5. Notes and limitations
 
-- Chain verification is O(n) per attestation request; acceptable at prototype
-  scale. Caching/incremental verification is future work.
-- The issuer public key is published per attestation and at
-  `GET /v1/receipt-public-key`. Key rotation is out of scope for v1.
+- Incremental chain verification trusts the prefix verified earlier in the
+  same process; `?full=true` re-verifies from genesis. Run a full
+  verification (and compare against an external anchor, §3.3) periodically
+  or when tampering is suspected.
+- The HTTP anchor transport posts the checkpoint but does not verify what
+  the remote endpoint stored; the guarantee comes from the external medium's
+  immutability (WORM/lock policy), not from the POST itself.
+- The Merkle accumulator is rebuilt from the journal on demand (O(n) read);
+  acceptable at prototype scale.
 - `verification.*` fields are computed live at request time; they are **not**
   part of the signed commitment. The binding guarantees are the receipt
-  signature (§2) and the chain (§3).
+  signature (§2), the chain + Merkle proofs (§3.1) and the key chain (§3.2).

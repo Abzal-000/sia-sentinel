@@ -7,7 +7,6 @@ import uuid
 from sentinel.cryptographic_receipts import (
     KeyringVerifier,
     ReceiptGenerator,
-    ReceiptVerifier,
 )
 import os
 from pathlib import Path
@@ -42,6 +41,7 @@ from .tenancy import DEFAULT_TENANT_ID, TenantManager, UsageMeter
 from .webhook_handler import WebhookHandler
 from sentinel.security import SecurityMiddleware, RateLimiter
 from sentinel.cors import setup_cors
+from sentinel.anchoring import publish_checkpoint
 # Ранний импорт auth-зависимостей: эндпоинты ниже (verify-change, network)
 # определены до секции Proof-of-Savings, но тоже обязаны быть под авторизацией.
 from sentinel.auth import (
@@ -69,7 +69,6 @@ if not RECEIPT_SIGNING_KEY:
     )
 
 receipt_generator = ReceiptGenerator(RECEIPT_SIGNING_KEY)
-receipt_verifier = ReceiptVerifier(receipt_generator.get_public_key())
 app = FastAPI(
     title="SIA Sentinel",
     description=(
@@ -1532,6 +1531,30 @@ def list_key_declarations() -> dict[str, Any]:
         "count": len(declarations),
         "active_kid": receipt_generator.kid,
         "declarations": declarations,
+    }
+
+
+@app.post("/v1/ledger/anchor")
+def anchor_ledger_checkpoint(
+    user: User = Depends(require_platform_admin),
+) -> dict[str, Any]:
+    """C4: create a checkpoint and publish it to external anchor storage.
+
+    Transports are picked up from the environment: the file transport
+    always (ANCHORS_DIR, default ``anchors/``), the HTTP transport when
+    ANCHOR_URL is set. Admin only.
+    """
+    checkpoint = receipt_registry.create_checkpoint(receipt_generator)
+
+    if checkpoint is None:
+        raise HTTPException(status_code=409, detail="Ledger is empty — nothing to anchor")
+
+    results = publish_checkpoint(checkpoint)
+
+    return {
+        "checkpoint": checkpoint,
+        "anchors": results,
+        "anchored": all(r["ok"] for r in results),
     }
 
 
