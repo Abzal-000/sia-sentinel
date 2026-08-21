@@ -33,6 +33,7 @@ from .llm_flow import (
     LLMFlowAuditor,
 )
 from .model_catalog import ModelSpec
+from .statistics import holm_bonferroni
 
 OPTIMIZATION_PROTOCOL = "proof-of-savings-optimization/1"
 
@@ -142,6 +143,7 @@ class OptimizationResult:
     final_audits: dict[str, FlowAuditReport]
     best: Optional[str]
     manifest: dict[str, Any]
+    multiplicity_correction: Optional[dict[str, Any]] = None
 
     @property
     def recommendation(self) -> Optional[dict[str, Any]]:
@@ -179,6 +181,7 @@ class OptimizationResult:
             "final_audits": {
                 name: report.to_dict() for name, report in self.final_audits.items()
             },
+            "multiplicity_correction": self.multiplicity_correction,
             "recommendation": self.recommendation,
             "manifest": self.manifest,
         }
@@ -206,6 +209,7 @@ class SavingsOptimizer:
         stage: str,
         quality_floor: float,
         confidence: float,
+        strict: bool = True,
     ) -> CandidateEvaluation:
         # Недоступная/ошибочная модель не должна ронять весь прогон:
         # она отбраковывается с причиной, оптимизация идёт по остальным.
@@ -234,16 +238,28 @@ class SavingsOptimizer:
         )
         pass_rate = passed / total if total else 0.0
 
-        # Скрининг — дешёвый префильтр: отбраковываем по точечной оценке
-        # pass rate. На малых подвыборках нижняя граница CI слишком
-        # консервативна, чтобы служить фильтром; статистическую гарантию
-        # даёт финальный полный аудит (эквивалентность + CI в claim).
-        eliminated = pass_rate < quality_floor
-        reason = (
-            f"pass rate {pass_rate:.3f} below quality floor {quality_floor}"
-            if eliminated
-            else None
-        )
+        if strict:
+            # Полный датасет: точечной оценке pass rate достаточно.
+            eliminated = pass_rate < quality_floor
+            reason = (
+                f"pass rate {pass_rate:.3f} below quality floor {quality_floor}"
+                if eliminated
+                else None
+            )
+        else:
+            # A2: скрининг на малой подвыборке — дешёвый префильтр.
+            # Отбраковываем только явно плохих кандидатов, у которых даже
+            # верхняя граница CI ниже порога. «Неопределённые» (точечная
+            # оценка ниже порога, но CI его пересекает) проходят в
+            # догоняющий раунд на полном датасете. Статистическую гарантию
+            # даёт финальный полный аудит, а не скрининг.
+            eliminated = pass_rate < quality_floor and ci_upper < quality_floor
+            reason = (
+                f"pass rate {pass_rate:.3f} below quality floor {quality_floor} "
+                f"(CI upper {ci_upper:.3f} also below)"
+                if eliminated
+                else None
+            )
 
         return CandidateEvaluation(
             model_name=config.model_name,
@@ -265,6 +281,20 @@ class SavingsOptimizer:
     ) -> OptimizationResult:
         if not candidates:
             raise ValueError("Optimizer requires at least one candidate")
+
+        # E6: скрининг идёт через evaluate_config (минуя audit_flow), поэтому
+        # обязательность чекеров проверяем и здесь — элемент без чекера не
+        # проверяет ничего.
+        unchecked = [
+            index
+            for index, item in enumerate(goal.dataset)
+            if not (item.get("expect_contains") or "").strip()
+        ]
+        if unchecked:
+            raise ValueError(
+                "Every dataset item requires a non-empty 'expect_contains' "
+                f"checker (items without one: {unchecked})."
+            )
 
         candidate_names = {spec.model_name for spec in candidates}
 
@@ -288,6 +318,7 @@ class SavingsOptimizer:
                 stage="screening",
                 quality_floor=goal.quality_floor,
                 confidence=goal.confidence,
+                strict=False,
             )
             evaluations.append(evaluation)
 
@@ -348,8 +379,6 @@ class SavingsOptimizer:
         # Этап 3: полный аудит финалистов против базовой конфигурации
         finalists = tuple(spec.model_name for spec in survivors)
         final_audits: dict[str, FlowAuditReport] = {}
-        best: Optional[str] = None
-        best_ratio = 0.0
 
         for spec in survivors:
             # Финальный аудит тоже устойчив: сбой одного финалиста
@@ -380,8 +409,27 @@ class SavingsOptimizer:
 
             final_audits[spec.model_name] = report
 
-            if report.savings_verified and report.costs.savings_ratio > best_ratio:
-                best = spec.model_name
+        # A3: поправка на множественность. Воронка сравнивает K финалистов с
+        # базовой конфигурацией — это семейство из K парных тестов. Без
+        # поправки family-wise ошибка растёт как 1-(1-alpha)^K. Корректируем
+        # p-значения Макнемара по Холму–Бонферрони при семейном уровне
+        # alpha = 1 - confidence; финалист проходит отбор только если его
+        # вердикт о качестве подтверждён после поправки.
+        multiplicity_correction = self._multiplicity_correction(
+            final_audits, goal.confidence
+        )
+        confirmed = set(multiplicity_correction["confirmed"]) if multiplicity_correction else set(final_audits)
+
+        best: Optional[str] = None
+        best_ratio = 0.0
+
+        for name, report in final_audits.items():
+            if not report.savings_verified:
+                continue
+            if name not in confirmed:
+                continue
+            if report.costs.savings_ratio > best_ratio:
+                best = name
                 best_ratio = report.costs.savings_ratio
 
         manifest = {
@@ -408,4 +456,64 @@ class SavingsOptimizer:
             final_audits=final_audits,
             best=best,
             manifest=manifest,
+            multiplicity_correction=multiplicity_correction,
         )
+
+    @staticmethod
+    def _multiplicity_correction(
+        final_audits: dict[str, FlowAuditReport],
+        confidence: float,
+    ) -> Optional[dict[str, Any]]:
+        """Холм–Бонферрони по p-значениям Макнемара финальных аудитов.
+
+        Возвращает блок прозрачности: семейный уровень alpha, p-значения,
+        решения Холма (reject = обнаружено значимое различие) и список
+        финалистов, чей вердикт подтверждён после поправки (значимого
+        различия качества не обнаружено).
+        """
+        if len(final_audits) < 2:
+            # Один финалист — семейства нет, поправка не применяется.
+            return None
+
+        names = list(final_audits)
+        p_values: list[float] = []
+        degraded_direction: list[bool] = []
+
+        for name in names:
+            paired = final_audits[name].equivalence.get("paired") or {}
+            # Нет парного результата — нет свидетельства различия (p=1).
+            p_values.append(float(paired.get("mcnemar_p", 1.0)))
+            # Направление дискордантности: b>c — новое роняет больше, чем
+            # чинит (деградация); c>b — новое лучше старого.
+            degraded_direction.append(
+                int(paired.get("b_old_pass_new_fail", 0))
+                > int(paired.get("c_old_fail_new_pass", 0))
+            )
+
+        alpha = max(1e-6, 1.0 - confidence)
+        rejected = holm_bonferroni(p_values, alpha=alpha)
+
+        per_finalist = {
+            name: {
+                "mcnemar_p": p_values[i],
+                "reject_symmetry": rejected[i],
+                "degradation_direction": degraded_direction[i],
+            }
+            for i, name in enumerate(names)
+        }
+        # Финалист подтверждён, если значимое различие НЕ обнаружено, либо
+        # оно обнаружено в сторону улучшения (c>b). Значимая деградация
+        # (reject при b>c) снимает кандидата с отбора.
+        confirmed = [
+            name
+            for i, name in enumerate(names)
+            if not (rejected[i] and degraded_direction[i])
+        ]
+
+        return {
+            "method": "holm-bonferroni",
+            "family_size": len(names),
+            "alpha": alpha,
+            "per_finalist": per_finalist,
+            "confirmed": confirmed,
+        }

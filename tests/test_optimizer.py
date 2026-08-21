@@ -251,6 +251,94 @@ class SavingsOptimizerTestCase(unittest.TestCase):
         self.assertEqual(result.best, "economy-model")
         self.assertNotIn("broken-endpoint", result.finalists)
 
+    def test_screening_keeps_indeterminate_candidate(self) -> None:
+        # A2: скрининг на подвыборке отбраковывает только явно плохих
+        # (точечная оценка ниже порога И верхняя граница CI тоже ниже).
+        # Кандидат 1/2 на подвыборке: точечная 0.5 < 0.9, но CI upper
+        # ~0.905 > 0.9 — «неопределённый», должен дожить до финала.
+        # По старому правилу (точечная оценка) он погиб бы на скрининге.
+        big_dataset = tuple(
+            {"label": f"case-{i}", "prompt": f"Question {i}?",
+             "expect_contains": f"answer-{i}"}
+            for i in range(10)
+        )
+        goal = OptimizationGoal(
+            dataset=big_dataset,
+            quality_floor=0.9,
+            screening_fraction=0.2,  # подвыборка из 2 элементов: case-0, case-5
+        )
+
+        class FlakyOnFirstItem:
+            """Роняет только case-0 (входит в подвыборку скрининга)."""
+
+            def complete(self, prompt: str, expect=None) -> CompletionResult:
+                if prompt == "Question 0?":
+                    text = "no idea"
+                else:
+                    text = f"surely {expect}"
+                return CompletionResult(text=text, input_tokens=5,
+                                        output_tokens=5, latency_sec=0.001)
+
+        optimizer = SavingsOptimizer(client_factory=lambda config: FlakyOnFirstItem())
+        candidates = [
+            ModelSpec(model_name="flaky-model", tier="economy",
+                      input_token_usd_per_m=0.1, output_token_usd_per_m=0.4),
+        ]
+
+        result = optimizer.optimize(goal=goal, baseline=BASELINE, candidates=candidates)
+
+        screening = [
+            ev for ev in result.evaluations
+            if ev.model_name == "flaky-model" and ev.stage == "screening"
+        ]
+        self.assertEqual(len(screening), 1)
+        self.assertAlmostEqual(screening[0].pass_rate, 0.5)
+        self.assertFalse(screening[0].eliminated)
+        self.assertIn("flaky-model", result.finalists)
+
+    def test_multiplicity_correction_reported_for_family(self) -> None:
+        # A3: при >=2 финалистах применяется Холм–Бонферрони и результат
+        # прозрачно публикуется в отчёте.
+        result = self.optimizer.optimize(
+            goal=self.goal, baseline=BASELINE, candidates=CANDIDATES
+        )
+
+        correction = result.multiplicity_correction
+        self.assertIsNotNone(correction)
+        self.assertEqual(correction["method"], "holm-bonferroni")
+        self.assertEqual(correction["family_size"], 2)
+        self.assertAlmostEqual(correction["alpha"], 0.05)
+        # Оба кандидата идентичны базовой по качеству (b=c=0, p=1.0):
+        # значимой деградации нет — оба подтверждены.
+        self.assertEqual(sorted(correction["confirmed"]),
+                         ["economy-model", "mid-model"])
+        for name in ("economy-model", "mid-model"):
+            entry = correction["per_finalist"][name]
+            self.assertAlmostEqual(entry["mcnemar_p"], 1.0)
+            self.assertFalse(entry["reject_symmetry"])
+            self.assertFalse(entry["degradation_direction"])
+
+        self.assertIn("multiplicity_correction", result.to_dict())
+
+    def test_multiplicity_correction_none_for_single_finalist(self) -> None:
+        # A3: один финалист — семейства нет, поправка не применяется.
+        result = self.optimizer.optimize(
+            goal=self.goal, baseline=BASELINE, candidates=CANDIDATES[:1]
+        )
+
+        self.assertIsNone(result.multiplicity_correction)
+
+    def test_dataset_without_checker_rejected(self) -> None:
+        # E6: датасет с элементом без чекера не допускается к оптимизации.
+        bad_dataset = (
+            {"label": "ok", "prompt": "2+2?", "expect_contains": "4"},
+            {"label": "no-checker", "prompt": "anything?"},
+        )
+        goal = OptimizationGoal(dataset=bad_dataset)
+
+        with self.assertRaises(ValueError):
+            self.optimizer.optimize(goal=goal, baseline=BASELINE, candidates=CANDIDATES)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -104,10 +104,10 @@ class ProofOfSavingsAuditorTestCase(unittest.TestCase):
 
     def test_manifest_is_deterministic_for_same_inputs(self) -> None:
         first = self.auditor.build_manifest(
-            OLD_CODE, NEW_CODE, SUITE, PricingConfig(), 1, (42,)
+            OLD_CODE, NEW_CODE, SUITE, PricingConfig(), 1, (42,), 0.0
         )
         second = self.auditor.build_manifest(
-            OLD_CODE, NEW_CODE, SUITE, PricingConfig(), 1, (42,)
+            OLD_CODE, NEW_CODE, SUITE, PricingConfig(), 1, (42,), 0.0
         )
 
         stable_keys = (
@@ -116,9 +116,59 @@ class ProofOfSavingsAuditorTestCase(unittest.TestCase):
             "test_suite_sha256",
             "repetitions",
             "seeds",
+            "delta",
         )
         for key in stable_keys:
             self.assertEqual(first[key], second[key])
+
+    def test_code_audit_uses_paired_statistics(self) -> None:
+        # A1: code-путь выносит вердикт по парному тесту (Ньюкомб/Макнемар/MDD),
+        # а не по старому verdict == "equivalent".
+        report = self.auditor.audit(
+            old_code=OLD_CODE,
+            new_code=NEW_CODE,
+            function_name="fib",
+            test_suite=SUITE,
+            args_template=(10,),
+            pricing=PricingConfig(compute_usd_per_hour=3.6),
+            delta=0.0,
+        )
+
+        self.assertIsNotNone(report.paired)
+        paired = report.paired
+        self.assertEqual(paired["n_pairs"], len(SUITE))
+        self.assertEqual(paired["b_old_pass_new_fail"], 0)
+        self.assertIn("mcnemar_p", paired)
+        self.assertIn("minimum_detectable_difference", paired)
+        self.assertIn("delta", paired)
+
+        claim = report.to_dict()["claim"]
+        self.assertEqual(claim["delta"], 0.0)
+        self.assertIn("mcnemar_p", claim)
+        self.assertIn("paired_ci", claim)
+        self.assertIn("minimum_detectable_difference", claim)
+
+        # delta попадает в манифест (покрывается подписью квитанции)
+        self.assertEqual(report.manifest["delta"], 0.0)
+
+    def test_code_audit_detects_regression_via_paired_test(self) -> None:
+        # Новая версия роняет тест, который проходит старая: b > 0,
+        # при delta=0 неинфериорность не устанавливается.
+        worse_code = "def fib(n):\n    return n - 1 if n > 1 else n\n"
+
+        report = self.auditor.audit(
+            old_code=OLD_CODE,
+            new_code=worse_code,
+            function_name="fib",
+            test_suite=SUITE,
+            args_template=(10,),
+            pricing=PricingConfig(compute_usd_per_hour=3.6),
+            delta=0.0,
+        )
+
+        self.assertGreater(report.paired["b_old_pass_new_fail"], 0)
+        self.assertFalse(report.paired["non_inferior"])
+        self.assertFalse(report.savings_verified)
 
 
 if __name__ == "__main__":

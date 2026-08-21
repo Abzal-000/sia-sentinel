@@ -21,6 +21,7 @@ from typing import Any, Optional, Sequence
 from .cost_model import CostModel, PricingConfig, SavingsResult
 from .evaluation_engine import EvaluationEngine
 from .models import EquivalenceReport
+from .statistics import NonInferiorityResult, non_inferiority_test
 
 
 def _sha256(text: str) -> str:
@@ -38,13 +39,29 @@ class AuditReport:
     quality_score: float
     security_vulnerabilities: int
     overall_efficiency_score: float
+    paired: Optional[dict[str, Any]] = None
 
     @property
     def savings_verified(self) -> bool:
-        """Экономия подтверждена: качество сохранено И деньги реально сэкономлены."""
+        """Экономия подтверждена: качество сохранено И деньги реально сэкономлены.
+
+        A1: критерий качества — парный тест неинфериорности (Ньюкомб + δ),
+        формально корректный для парного дизайна. Как и в llm_flow: нулевая
+        дискордантность (b=c=0) означает идентичное наблюдаемое качество —
+        claim честен при опубликованном MDD, даже если малое n не даёт CI
+        подтвердить неинфериорность.
+        """
         if not self.costs:
             return False
-        quality_preserved = self.equivalence.get("verdict") == "equivalent"
+
+        if self.paired is not None:
+            quality_preserved = bool(self.paired.get("non_inferior")) or (
+                self.paired.get("b_old_pass_new_fail", 0) == 0
+                and self.paired.get("c_old_fail_new_pass", 0) == 0
+            )
+        else:
+            quality_preserved = self.equivalence.get("verdict") == "equivalent"
+
         return quality_preserved and self.costs.get("savings_ratio", 0.0) > 0
 
     def to_dict(self) -> dict[str, Any]:
@@ -62,12 +79,21 @@ class AuditReport:
         ]
         claim["confidence_level"] = self.equivalence.get("confidence_level")
 
+        if self.paired is not None:
+            claim["delta"] = self.paired.get("delta")
+            claim["mcnemar_p"] = self.paired.get("mcnemar_p")
+            claim["minimum_detectable_difference"] = self.paired.get(
+                "minimum_detectable_difference"
+            )
+            claim["paired_ci"] = [self.paired.get("ci_lower"), self.paired.get("ci_upper")]
+
         return {
             "protocol": "proof-of-savings/1",
             "claim": claim,
             "manifest": self.manifest,
             "performance": self.performance,
             "equivalence": self.equivalence,
+            "paired": self.paired,
             "costs": self.costs,
             "quality_score": self.quality_score,
             "security_vulnerabilities": self.security_vulnerabilities,
@@ -89,6 +115,7 @@ class ProofOfSavingsAuditor:
         pricing: Optional[PricingConfig],
         repetitions: int,
         seeds: Sequence[int],
+        delta: float,
     ) -> dict[str, Any]:
         return {
             "protocol": "proof-of-savings/1",
@@ -103,6 +130,7 @@ class ProofOfSavingsAuditor:
             "test_suite_sha256": _sha256("\n".join(test_suite)),
             "repetitions": repetitions,
             "seeds": [int(seed) for seed in seeds],
+            "delta": delta,
             "pricing": pricing.to_dict() if pricing is not None else None,
         }
 
@@ -117,7 +145,14 @@ class ProofOfSavingsAuditor:
         confidence: float = 0.95,
         repetitions: int = 1,
         seeds: Sequence[int] = (42,),
+        delta: float = 0.0,
     ) -> AuditReport:
+        """Парный аудит: delta — заранее объявленный маркер неинфериорности.
+
+        Для детерминированных тестовых сьютов корректно delta=0 («новое не
+        должно уронить ни одного теста, который проходит старое»). Для
+        стохастических тестов delta объявляется до прогона.
+        """
         normalized_suite = [test.strip() for test in test_suite if test and test.strip()]
 
         performance = self.evaluation.compare_performance_detailed(
@@ -134,6 +169,17 @@ class ProofOfSavingsAuditor:
             confidence=confidence,
             repetitions=repetitions,
         )
+
+        # A1: парная статистика на исходах «тест × версия» — тот же стандарт,
+        # что и в llm_flow (Ньюкомб, Макнемар, MDD).
+        paired: Optional[NonInferiorityResult] = None
+        if equivalence.old_pass and equivalence.new_pass:
+            paired = non_inferiority_test(
+                equivalence.old_pass,
+                equivalence.new_pass,
+                delta=delta,
+                confidence=equivalence.confidence_level,
+            )
 
         costs: Optional[SavingsResult] = None
 
@@ -162,6 +208,7 @@ class ProofOfSavingsAuditor:
             pricing,
             repetitions,
             seeds,
+            delta,
         )
 
         return AuditReport(
@@ -172,4 +219,5 @@ class ProofOfSavingsAuditor:
             quality_score=quality_score,
             security_vulnerabilities=security_vulnerabilities,
             overall_efficiency_score=overall,
+            paired=paired.to_dict() if paired is not None else None,
         )

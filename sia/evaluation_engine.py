@@ -2,7 +2,6 @@
 
 import ast
 import json
-import math
 import os
 import subprocess
 import sys
@@ -20,6 +19,7 @@ from .models import (
     SafetyCheckResult,
     Task,
 )
+from .statistics import wilson_ci
 
 
 
@@ -109,18 +109,14 @@ def wilson_confidence_interval(
     total: int,
     confidence: float = 0.95,
 ) -> tuple[float, float]:
-    """Интервал Вильсона для доли успехов (биномиальный CI без scipy)."""
-    if total <= 0:
-        return 0.0, 1.0
+    """Интервал Вильсона для доли успехов (биномиальный CI без scipy).
 
-    z, _ = resolve_confidence(confidence)
-
-    p = successes / total
-    denom = 1.0 + z * z / total
-    center = (p + z * z / (2 * total)) / denom
-    margin = (z * math.sqrt(p * (1 - p) / total + z * z / (4 * total * total))) / denom
-
-    return max(0.0, center - margin), min(1.0, center + margin)
+    A4: тонкая обёртка над канонической реализацией ``sia.statistics.wilson_ci``;
+    нестандартный уровень доверия сначала приводится к ближайшему известному
+    (B4b), чтобы обе точки входа давали идентичные числа.
+    """
+    _, effective = resolve_confidence(confidence)
+    return wilson_ci(successes, total, confidence=effective)
 
 
 class EvaluationEngine:
@@ -280,17 +276,23 @@ class EvaluationEngine:
 
         old_failures: list[str] = []
         new_failures: list[str] = []
+        old_pass: list[bool] = []
+        new_pass: list[bool] = []
 
         for test in normalized_suite:
-            if not self._run_tests(old_code, test):
+            old_ok = self._run_tests(old_code, test)
+            if not old_ok:
                 old_failures.append(test)
+            old_pass.append(old_ok)
 
             new_passed_runs = sum(
                 1 for _ in range(repetitions) if self._run_tests(new_code, test)
             )
+            new_ok = new_passed_runs >= repetitions
 
-            if new_passed_runs < repetitions:
+            if not new_ok:
                 new_failures.append(test)
+            new_pass.append(new_ok)
 
         total = len(normalized_suite)
         passed_old = total - len(old_failures)
@@ -319,6 +321,8 @@ class EvaluationEngine:
             ci_upper=ci_upper,
             confidence_level=effective_confidence,
             repetitions=repetitions,
+            old_pass=tuple(old_pass),
+            new_pass=tuple(new_pass),
         )
 
     def calculate_quality_score(self, code: str) -> float:

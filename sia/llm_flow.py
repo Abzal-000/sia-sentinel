@@ -54,6 +54,10 @@ class LLMEndpointConfig:
     # Профиль детерминированного ответчика: verbose / standard / concise
     profile: str = "standard"
     seed: int = 42
+    # E6: явная надёжность симулятора (вероятность корректного ответа).
+    # None — брать из профиля. Публичный параметр: попадает в манифест,
+    # чтобы допущение о качестве в simulated-режиме было задекларировано.
+    simulated_reliability: Optional[float] = None
 
     def resolve_pricing(self, defaults: PricingConfig) -> PricingConfig:
         return PricingConfig(
@@ -80,6 +84,7 @@ class LLMEndpointConfig:
             "temperature": self.temperature,
             "profile": self.profile,
             "seed": self.seed,
+            "simulated_reliability": self.simulated_reliability,
         }
 
 
@@ -87,15 +92,21 @@ class SimulatedLLMClient:
     """Детерминированный офлайн-ответчик.
 
     Токены и латентность моделируются от seed и промпта (латентность —
-    расчётная величина, реального ожидания нет). Если задан expect,
-    ответ гарантированно содержит его — чекеры проходят одинаково для
-    обеих конфигураций, различаются только затраты.
+    расчётная величина, реального ожидания нет).
+
+    E6: симуляция нетавтологична. Корректность ответа — не гарантия, а
+    детерминированное испытание с объявленной надёжностью профиля
+    (``reliability``): для каждого элемента датасета seeded-RNG решает,
+    содержит ли ответ ожидаемую строку. При reliability < 1.0 парный тест
+    реально измеряет (смоделированную) разницу качества. Надёжность —
+    публичное допущение: она попадает в манифест через public_dict(),
+    а отчёт несёт caveat о simulated-режиме.
     """
 
     PROFILES = {
-        "verbose": {"tokens_factor": 3.0, "latency_per_token": 0.030},
-        "standard": {"tokens_factor": 1.0, "latency_per_token": 0.010},
-        "concise": {"tokens_factor": 0.45, "latency_per_token": 0.004},
+        "verbose": {"tokens_factor": 3.0, "latency_per_token": 0.030, "reliability": 1.0},
+        "standard": {"tokens_factor": 1.0, "latency_per_token": 0.010, "reliability": 1.0},
+        "concise": {"tokens_factor": 0.45, "latency_per_token": 0.004, "reliability": 1.0},
     }
 
     def __init__(self, config: LLMEndpointConfig):
@@ -103,6 +114,26 @@ class SimulatedLLMClient:
             raise ValueError(f"Unknown simulated profile: {config.profile}")
 
         self.config = config
+
+    def _reliability(self, profile: dict[str, float]) -> float:
+        reliability = self.config.simulated_reliability
+        if reliability is None:
+            reliability = profile["reliability"]
+        return max(0.0, min(1.0, float(reliability)))
+
+    @staticmethod
+    def _distractor(expect: str, seed_material: str) -> str:
+        """Текст, который заведомо не содержит ожидаемую строку.
+
+        Алфавит ограничен символами, отсутствующими в expect (в обоих
+        регистрах), поэтому подстрока не может совпасть случайно — в том
+        числе с префиксом имени модели, которого здесь намеренно нет.
+        """
+        alphabet = "abcdefghijklmnopqrstuvwxyz0123456789 -"
+        excluded = set(expect.lower()) | set(expect.upper())
+        pool = [ch for ch in alphabet if ch not in excluded] or ["?"]
+        digest = hashlib.sha256(f"{seed_material}:distractor".encode("utf-8")).hexdigest()
+        return "".join(pool[int(ch, 16) % len(pool)] for ch in digest[:24])
 
     def complete(self, prompt: str, expect: Optional[str] = None) -> CompletionResult:
         profile = self.PROFILES[self.config.profile]
@@ -122,9 +153,20 @@ class SimulatedLLMClient:
 
         latency_sec = output_tokens * profile["latency_per_token"] * (1.0 + rng.random() * 0.1)
 
-        body = expect if expect is not None else hashlib.sha256(prompt.encode()).hexdigest()[:12]
-        filler = hashlib.sha256(f"{seed_material}:filler".encode()).hexdigest()
-        text = f"[{self.config.model_name}] {body} {filler}"
+        # E6: корректность — испытание с объявленной надёжностью, а не гарантия.
+        # В ветке неверного ответа весь текст строится из алфавита без символов
+        # ожидаемой строки — иначе filler (hex) или имя модели могли бы случайно
+        # её содержать, возвращая тавтологию.
+        if expect is not None:
+            if rng.random() < self._reliability(profile):
+                filler = hashlib.sha256(f"{seed_material}:filler".encode()).hexdigest()
+                text = f"[{self.config.model_name}] {expect} {filler}"
+            else:
+                text = self._distractor(expect, seed_material)
+        else:
+            body = hashlib.sha256(prompt.encode()).hexdigest()[:12]
+            filler = hashlib.sha256(f"{seed_material}:filler".encode()).hexdigest()
+            text = f"[{self.config.model_name}] {body} {filler}"
 
         return CompletionResult(
             text=text,
@@ -210,6 +252,9 @@ class FlowAuditReport:
     costs: SavingsResult
     equivalence: dict[str, Any]
     manifest: dict[str, Any]
+    # E6: simulated-режим честно помечается не только меткой mode, но и
+    # явным предупреждением о том, что именно симулировалось.
+    caveat: Optional[str] = None
 
     @property
     def savings_verified(self) -> bool:
@@ -232,6 +277,7 @@ class FlowAuditReport:
         return {
             "protocol": "proof-of-savings-llm/1",
             "mode": self.mode,
+            "caveat": self.caveat,
             "claim": {
                 "savings_verified": self.savings_verified,
                 "savings_ratio": round(self.costs.savings_ratio, 6),
@@ -384,6 +430,21 @@ class LLMFlowAuditor:
         if not dataset:
             raise ValueError("Dataset must contain at least one item")
 
+        # E6: каждый элемент датасета обязан иметь непустой expect_contains.
+        # Без чекера элемент не проверяет ничего — его «прохождение»
+        # тавтологично и не может участвовать в доказательстве качества.
+        unchecked = [
+            index
+            for index, item in enumerate(dataset)
+            if not (item.get("expect_contains") or "").strip()
+        ]
+        if unchecked:
+            raise ValueError(
+                "Every dataset item requires a non-empty 'expect_contains' "
+                f"checker (items without one: {unchecked}). An item with no "
+                "checker verifies nothing."
+            )
+
         repetitions = max(1, int(repetitions))
         old_client = self.client_factory(old_config)
         new_client = self.client_factory(new_config)
@@ -446,6 +507,17 @@ class LLMFlowAuditor:
 
         mode = "simulated" if isinstance(new_client, SimulatedLLMClient) else "live"
 
+        caveat: Optional[str] = None
+        if mode == "simulated":
+            caveat = (
+                "Simulated mode: responses are produced by a deterministic "
+                "offline responder, not a real model. Correctness of each "
+                "answer is a seeded trial at the declared per-profile "
+                "reliability (see manifest endpoints' simulated_reliability). "
+                "Cost and latency figures are modeled, not measured. "
+                "This report does not attest real model quality."
+            )
+
         manifest = {
             "protocol": "proof-of-savings-llm/1",
             "created": _dt.datetime.now(_dt.timezone.utc).isoformat(),
@@ -467,4 +539,5 @@ class LLMFlowAuditor:
             costs=costs,
             equivalence=equivalence,
             manifest=manifest,
+            caveat=caveat,
         )

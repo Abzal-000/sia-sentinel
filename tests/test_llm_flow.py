@@ -136,6 +136,70 @@ class LLMFlowAuditorTestCase(unittest.TestCase):
                 LLMEndpointConfig(model_name="new"),
             )
 
+    def test_dataset_item_without_checker_rejected(self) -> None:
+        # E6: элемент без expect_contains не проверяет ничего — такой
+        # датасет не допускается к аудиту.
+        dataset = [
+            {"label": "ok", "prompt": "2+2?", "expect_contains": "4"},
+            {"label": "no-checker", "prompt": "anything?"},
+        ]
+
+        with self.assertRaises(ValueError):
+            self.auditor.audit_flow(
+                dataset,
+                LLMEndpointConfig(model_name="old"),
+                LLMEndpointConfig(model_name="new"),
+            )
+
+    def test_simulated_report_carries_caveat(self) -> None:
+        # E6: simulated-режим помечается не только mode, но и явным caveat.
+        report = self.auditor.audit_flow(
+            DATASET,
+            LLMEndpointConfig(model_name="old"),
+            LLMEndpointConfig(model_name="new"),
+        )
+
+        self.assertEqual(report.mode, "simulated")
+        self.assertIsNotNone(report.caveat)
+        self.assertIn("Simulated mode", report.caveat)
+        self.assertIn("caveat", report.to_dict())
+
+    def test_simulated_reliability_zero_fails_all_checks(self) -> None:
+        # E6: симуляция нетавтологична — при надёжности 0.0 ответы не
+        # содержат ожидаемую строку, качество «падает», вердикт degraded.
+        old = LLMEndpointConfig(model_name="old", simulated_reliability=1.0)
+        new = LLMEndpointConfig(model_name="new", simulated_reliability=0.0)
+
+        report = self.auditor.audit_flow(DATASET, old, new, repetitions=1)
+
+        self.assertEqual(report.equivalence["verdict"], "degraded")
+        self.assertFalse(report.savings_verified)
+        self.assertGreater(report.equivalence["paired"]["b_old_pass_new_fail"], 0)
+
+    def test_simulated_distractor_never_contains_expect(self) -> None:
+        # E6: неверный ответ заведомо не содержит ожидаемую строку.
+        config = LLMEndpointConfig(model_name="m", simulated_reliability=0.0)
+        client = SimulatedLLMClient(config)
+
+        for expect in ("4", "Paris", "answer-1", "a", "0"):
+            result = client.complete("some prompt", expect=expect)
+            self.assertNotIn(expect, result.text)
+
+    def test_reliability_is_public_manifest_field(self) -> None:
+        # E6: допущение о надёжности публично — попадает в манифест.
+        report = self.auditor.audit_flow(
+            DATASET,
+            LLMEndpointConfig(model_name="old", simulated_reliability=0.9),
+            LLMEndpointConfig(model_name="new", simulated_reliability=0.8),
+        )
+
+        self.assertEqual(
+            report.manifest["old_endpoint"]["simulated_reliability"], 0.9
+        )
+        self.assertEqual(
+            report.manifest["new_endpoint"]["simulated_reliability"], 0.8
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

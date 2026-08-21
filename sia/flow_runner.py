@@ -161,6 +161,10 @@ def _audit_code_flow(flow: dict[str, Any]) -> dict[str, Any]:
 
     repetitions = min(int(flow.get("repetitions", 1)), MAX_REPETITIONS)
 
+    delta = float(flow.get("delta", 0.0))
+    if not 0.0 <= delta <= 1.0:
+        raise ValueError("delta must be within [0, 1]")
+
     auditor = ProofOfSavingsAuditor(
         evaluation=EvaluationEngine(
             performance_iterations=flow.get("performance_iterations", 100),
@@ -179,6 +183,7 @@ def _audit_code_flow(flow: dict[str, Any]) -> dict[str, Any]:
         confidence=flow.get("confidence", 0.95),
         repetitions=repetitions,
         seeds=tuple(flow.get("seeds", (42,))),
+        delta=delta,
     )
 
     report_dict = report.to_dict()

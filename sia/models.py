@@ -87,6 +87,9 @@ class EquivalenceReport:
 
     `ci_lower`/`ci_upper` — интервал Вильсона для доли проходов новой
     версии на тестовом сьюте при заданном уровне доверия.
+
+    `old_pass`/`new_pass` — парные исходы по каждому тесту (True=прошёл);
+    основа для парной статистики (Ньюкомб, Макнемар, неинфериорность).
     """
 
     total: int
@@ -101,6 +104,8 @@ class EquivalenceReport:
     ci_upper: float = 1.0
     confidence_level: float = 0.95
     repetitions: int = 1
+    old_pass: tuple[bool, ...] = ()
+    new_pass: tuple[bool, ...] = ()
 
     @property
     def equivalent(self) -> bool:
@@ -129,5 +134,7 @@ class EquivalenceReport:
             "ci_upper": self.ci_upper,
             "confidence_level": self.confidence_level,
             "repetitions": self.repetitions,
+            "old_pass": list(self.old_pass),
+            "new_pass": list(self.new_pass),
             "verdict": self.verdict,
         }
