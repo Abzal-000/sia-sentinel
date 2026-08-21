@@ -33,6 +33,8 @@ services:
       - USAGE_EVENTS_FILE=/app/data/usage_events.jsonl
       - INVOICES_FILE=/app/data/invoices.json
       - RECEIPTS_DIR=/app/data/receipts
+      - WEBHOOKS_FILE=/app/data/webhooks.json
+      - EVIDENCE_DIR=/app/data/evidence
       # --- Опционально ---
       - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - ENABLE_DEMO_LOGIN=${ENABLE_DEMO_LOGIN:-}

@@ -19,10 +19,11 @@ class EvidenceStore:
 
     def __init__(
         self,
-        evidence_dir: str = "evidence",
+        evidence_dir: Optional[str] = None,
         signing_key: Optional[str] = None,
     ):
-        self.evidence_dir = Path(evidence_dir)
+        # D13: каталог настраивается через EVIDENCE_DIR (в проде — на томе)
+        self.evidence_dir = Path(evidence_dir or os.getenv("EVIDENCE_DIR") or "evidence")
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
 
         # Use environment variable or provided key

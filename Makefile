@@ -8,7 +8,7 @@ install:  ## Install dependencies
 	python -m pip install -r requirements.txt
 
 test:  ## Run all tests
-	python -m unittest discover -s tests -v
+	python -m unittest discover -s tests -t . -v
 
 test-security:  ## Run security tests only
 	python -m unittest tests.test_security_suite -v
