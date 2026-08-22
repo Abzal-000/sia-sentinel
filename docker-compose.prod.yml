@@ -84,14 +84,19 @@ services:
       - "443:443"
     environment:
       - DOMAIN=${DOMAIN:?DOMAIN is required}
-      - ACME_EMAIL=${ACME_EMAIL:-}
+      # Обязательна: без неё глобальный блок email в Caddyfile пуст и Caddy
+      # не стартует; с ней уведомления Let's Encrypt об истечении приходят
+      - ACME_EMAIL=${ACME_EMAIL:?ACME_EMAIL is required}
     volumes:
       - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     restart: unless-stopped
     depends_on:
-      - sentinel
+      sentinel:
+        # Ждём здоровья sentinel, чтобы на первом старте не было окна 502
+        # (которое иначе диагностируется как поломка Caddy)
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine

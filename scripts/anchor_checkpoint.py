@@ -5,19 +5,22 @@
 через настроенные транспорты (файловый каталог ANCHORS_DIR — по умолчанию
 ``anchors/``; HTTP POST на ANCHOR_URL, если задан).
 
-Запуск из корня проекта::
+Локальный запуск из корня проекта (dev, с заданным окружением)::
 
-    python scripts/anchor_checkpoint.py
+    RECEIPTS_DIR=receipts RECEIPT_SIGNING_KEY=... python scripts/anchor_checkpoint.py
 
-Крон-пример (анкор каждый час, синхронизация каталога анкоров в S3)::
+Крон в проде — ТОЛЬКО через контейнер (на хосте нет ни venv, ни
+env-переменных, а дефолтный RECEIPTS_DIR укажет не на тот леджер;
+sync идёт с хоста, где ./data виден через bind mount)::
 
-    0 * * * * cd /srv/sentinel && python scripts/anchor_checkpoint.py \\
-        && aws s3 sync anchors/ s3://sentinel-anchors/ --exact-timestamps
+    0 * * * * cd /srv/sentinel && docker compose -f docker-compose.prod.yml exec -T sentinel python scripts/anchor_checkpoint.py
+    30 * * * * aws s3 sync /srv/sentinel/data/anchors/ s3://sentinel-anchors/ --exact-timestamps
 
 Требует те же переменные окружения, что и API: RECEIPTS_DIR (где лежит
-ledger) и RECEIPT_SIGNING_KEY (ключ подписи чекпоинтов). Внешний анкор
-надо держать в хранилище, недоступном для записи работающему Sentinel, —
-иначе компрометация сервера позволит переписать и цепочку, и анкоры.
+ledger) и RECEIPT_SIGNING_KEY (ключ подписи чекпоинтов; без него скрипт
+отказывается — exit 3). Внешний анкор надо держать в хранилище,
+недоступном для записи работающему Sentinel, — иначе компрометация
+сервера позволит переписать и цепочку, и анкоры.
 """
 from __future__ import annotations
 

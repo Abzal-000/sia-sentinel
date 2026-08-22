@@ -1,8 +1,13 @@
 # Caddy перед Sentinel: автоматический TLS (Let's Encrypt / ACME).
 #
 # {$DOMAIN} и {$ACME_EMAIL} приходят из docker-compose.prod.yml.
-# При ACME_EMAIL Caddy использует HTTP-01 challenge; без email —
-# тот же флоу с email по умолчанию для уведомлений об истечении.
+# Глобальный блок ниже регистрирует email в ACME-аккаунте — Let's Encrypt
+# шлёт туда уведомления об истечении; для сервиса, чей смысл «всегда
+# проверяемо», молча истёкший сертификат гасит и бейдж, и портал.
+
+{
+	email {$ACME_EMAIL}
+}
 
 {$DOMAIN} {
 	encode gzip

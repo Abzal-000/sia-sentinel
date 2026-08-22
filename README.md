@@ -206,6 +206,11 @@ export ACME_EMAIL=ops@yourdomain.com
 # Bind-монты: контейнер пишет под uid 1000 — каталоги должны быть его
 mkdir -p data logs && sudo chown -R 1000:1000 data logs
 
+# Пред-проверка: рендерит compose с подстановками, ничего не запуская.
+# Ошибки вложенной интерполяции (CORS-дефолт от DOMAIN) всплывают здесь,
+# а не как загадочный CORS-сбой на работающем стеке.
+docker compose -f docker-compose.prod.yml config >/dev/null
+
 docker compose -f docker-compose.prod.yml up -d
 ```
 
