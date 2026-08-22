@@ -165,27 +165,13 @@ def init_db() -> None:
 
 
 @contextmanager
-def get_db():
-    """Context manager yielding an open database session.
+def get_db_session():
+    """Context manager for database sessions.
 
     The session is committed on success, rolled back on error, and always
     closed. (Previously returned an already-closed session — the ``finally``
     ran before the caller could use it.)
     """
-    db = SessionLocal()
-    try:
-        yield db
-        db.commit()
-    except Exception:
-        db.rollback()
-        raise
-    finally:
-        db.close()
-
-
-@contextmanager
-def get_db_session():
-    """Context manager for database sessions."""
     db = SessionLocal()
     try:
         yield db
