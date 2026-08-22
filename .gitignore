@@ -88,3 +88,6 @@ anchors/
 
 # Prod bind-mount runtime state (compose ./data)
 data/
+
+# Downloaded datasets for beacon preparation (e.g. GSM8K)
+.cache/

@@ -120,7 +120,7 @@ class NonInferiorityTestCase(unittest.TestCase):
         # Наблюдённая дискордантность ниже допущения (2% < 10%): MDD
         # остаётся на полу-допущении — число не может стать оптимистичнее
         old = [True] * 196 + [False] * 4
-        new = [True] * 200  # b=4, c=0
+        new = [True] * 200  # b=0, c=4 (новый починил 4 элемента, не сломал)
 
         result = non_inferiority_test(old, new, delta=0.10)
 

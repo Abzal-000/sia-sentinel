@@ -292,7 +292,7 @@ sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, web
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
 docs/           Attestation spec + JSON Schema
-tests/          575 tests (unittest)
+tests/          583 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
@@ -300,6 +300,6 @@ audit_cli.py    CLI: audit / optimize / sign / verify
 ## Status
 
 Prototype-stage, fully working core: live pilots against NVIDIA NIM endpoints
-have verified real savings claims; the test suite (575 tests) covers the audit
+have verified real savings claims; the test suite (583 tests) covers the audit
 engine, ledger, tenancy, billing, jobs persistence, public attestation network,
 self-service onboarding, and the SDK. See `SECURITY_REPORT.md` for the security review.

@@ -24,8 +24,14 @@ from .llm_flow import LLMEndpointConfig, LLMFlowAuditor
 from .model_catalog import ModelCatalog, ModelSpec
 from .optimizer import OptimizationGoal, SavingsOptimizer
 
-# Защитные лимиты внешнего ввода
-MAX_DATASET_ITEMS = 200
+# Защитные лимиты внешнего ввода.
+# MAX_DATASET_ITEMS обязан оставаться НЕ статистическим ограничением:
+# MDD = 2.487·√(p_disc/n), поэтому δ=5 п.п. при 10% дискордантности
+# требует n≈250–300, расхождение моделей ~20% — ~500 (чем сильнее
+# расходятся модели, тем больше пар нужно). При лимите 200 публикуемый
+# MDD (5.56 п.п.) превышал δ=5 п.п. — протокол не мог обосновать круглое
+# пятипроцентное заявление на максимально разрешённом датасете.
+MAX_DATASET_ITEMS = 1000
 MAX_TEST_SUITE_ITEMS = 200
 MAX_CODE_CHARS = 200_000
 MAX_REPETITIONS = 10
@@ -253,27 +259,14 @@ def _audit_llm_flow(flow: dict[str, Any]) -> dict[str, Any]:
         output_token_usd_per_m=pricing_block.get("output_token_usd_per_m", 0.60),
     )
 
-    def _endpoint(block: dict[str, Any]) -> LLMEndpointConfig:
-        api_key = block.get("api_key")
-
-        if not api_key and block.get("api_key_env"):
-            api_key = resolve_env(block["api_key_env"])
-
-        return LLMEndpointConfig(
-            model_name=block.get("model_name", "unknown-model"),
-            input_token_usd_per_m=block.get("input_token_usd_per_m"),
-            output_token_usd_per_m=block.get("output_token_usd_per_m"),
-            base_url=block.get("base_url"),
-            api_key=api_key,
-            temperature=block.get("temperature", 0.0),
-            profile=block.get("profile", "standard"),
-            seed=block.get("seed", 42),
-        )
-
+    # Один сборщик эндпоинта и для аудита, и для предрегистрации: раньше
+    # локальный дубликат _endpoint не передавал prices_as_of/catalog_version,
+    # и манифест аудита терял датировку цен, которую несло обязательство
+    # предрегистрации (E5 отваливался ровно на пути аудита).
     auditor = LLMFlowAuditor(defaults=defaults)
 
-    old_config = _endpoint(old_block)
-    new_config = _endpoint(new_block)
+    old_config = _endpoint_from_block(old_block)
+    new_config = _endpoint_from_block(new_block)
     repetitions = min(int(flow.get("repetitions", 1)), MAX_REPETITIONS)
     confidence = flow.get("confidence", 0.95)
     delta = float(flow.get("delta", 0.05))
