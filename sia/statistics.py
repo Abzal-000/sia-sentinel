@@ -208,7 +208,12 @@ def non_inferiority_test(
             «Новое допустимо хуже старого не более чем на delta».
             ДОЛЖЕН быть объявлен до прогона (предрегистрация).
         confidence: уровень доверия для интервала.
-        p_discordant_assumption: оценка доли дискордантных пар для MDD.
+        p_discordant_assumption: НИЖНЯЯ граница доли дискордантных пар для
+            MDD. Фактически используется max(допущение, наблюдённая доля):
+            MDD характеризует ЭТОТ прогон, и если дискордантность выше
+            допущения, публиковать MDD по допущению — занижать собственную
+            слепоту (худший случай: дешёвая модель реально хуже — тот,
+            ради которого аудит существует).
 
     Returns:
         NonInferiorityResult с вердиктом, интервалом и MDD.
@@ -226,8 +231,12 @@ def non_inferiority_test(
     diff = (c - b) / n if n > 0 else 0.0
     ci_lower, ci_upper = newcombe_paired_ci(b, c, n, confidence)
     mcnemar_p = mcnemar_exact(b, c)
+    observed_discordant = ((b + c) / n) if n > 0 else 0.0
     mdd = minimum_detectable_difference(
-        n, alpha=1.0 - confidence, power=0.80, p_discordant=p_discordant_assumption
+        n,
+        alpha=1.0 - confidence,
+        power=0.80,
+        p_discordant=max(p_discordant_assumption, observed_discordant),
     )
 
     # Неинфериорность: нижняя граница CI для (p_new - p_old) > -delta

@@ -44,7 +44,7 @@ configuration. The verdict methodology is published in the attestation:
 | `non_inferior` | bool | Non-inferiority verdict: Newcombe CI lower bound for `p_new − p_old` > `−delta`. |
 | `delta` | number | Pre-declared non-inferiority margin (0 = no quality drop tolerated; default for deterministic code suites). |
 | `mcnemar_p` | number | Exact McNemar two-sided p-value on discordant pairs. |
-| `minimum_detectable_difference` | number | MDD at n pairs, α = 1−confidence, 80% power: the smallest quality drop this audit could have noticed. |
+| `minimum_detectable_difference` | number | MDD at n pairs, α = 1−confidence, 80% power: the smallest quality drop this audit could have noticed. Computed from `max(assumed, observed)` discordance — the observed rate `((b+c)/n)` is a floor-raiser, so the published MDD can never understate this run's blindness when discordance exceeds the 10% planning assumption. |
 | `n_pairs` | integer | Number of paired observations. |
 | `b_old_pass_new_fail` | integer | Discordant pairs where old passed and new failed. |
 | `c_old_fail_new_pass` | integer | Discordant pairs where old failed and new passed. |

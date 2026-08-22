@@ -96,6 +96,53 @@ class NonInferiorityTestCase(unittest.TestCase):
         self.assertGreater(result.mdd, 0.0)
         self.assertLess(result.mdd, 1.0)
 
+    def test_mdd_uses_observed_discordance_when_above_assumption(self) -> None:
+        # 30 из 100 пар дискордантны (30% > допущения 10%): опубликованный
+        # MDD обязан характеризовать ЭТОТ прогон, а не гипотетический с 10%.
+        # Раньше MDD молча считался по 0.10 и занижал слепоту аудита ровно
+        # в том случае, когда дешёвая модель реально хуже.
+        old = [True] * 85 + [False] * 15
+        new = [True] * 55 + [False] * 45  # b=30, c=0
+
+        result = non_inferiority_test(old, new, delta=0.10)
+
+        expected = minimum_detectable_difference(
+            100, alpha=0.05, power=0.80, p_discordant=0.30
+        )
+        self.assertAlmostEqual(result.mdd, expected, places=10)
+
+        default_assumption = minimum_detectable_difference(
+            100, alpha=0.05, power=0.80, p_discordant=0.10
+        )
+        self.assertGreater(result.mdd, default_assumption)
+
+    def test_mdd_never_more_optimistic_than_assumption(self) -> None:
+        # Наблюдённая дискордантность ниже допущения (2% < 10%): MDD
+        # остаётся на полу-допущении — число не может стать оптимистичнее
+        old = [True] * 196 + [False] * 4
+        new = [True] * 200  # b=4, c=0
+
+        result = non_inferiority_test(old, new, delta=0.10)
+
+        expected = minimum_detectable_difference(
+            200, alpha=0.05, power=0.80, p_discordant=0.10
+        )
+        self.assertAlmostEqual(result.mdd, expected, places=10)
+
+    def test_mdd_respects_higher_explicit_assumption(self) -> None:
+        # Явное допущение выше наблюдённого уважается как пол
+        old = [True] * 196 + [False] * 4
+        new = [True] * 200  # наблюдённая дискордантность 2%
+
+        result = non_inferiority_test(
+            old, new, delta=0.10, p_discordant_assumption=0.25
+        )
+
+        expected = minimum_detectable_difference(
+            200, alpha=0.05, power=0.80, p_discordant=0.25
+        )
+        self.assertAlmostEqual(result.mdd, expected, places=10)
+
     def test_mismatched_lengths_raises(self) -> None:
         with self.assertRaises(ValueError):
             non_inferiority_test([True], [True, False], delta=0.1)
