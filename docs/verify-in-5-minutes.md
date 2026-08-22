@@ -65,12 +65,48 @@ sia-verifier attestation.json --chain registry.jsonl
 ## Шаг 4 (усиление). Проверьте чекпоинт
 
 Голова цепочки периодически якорится подписанным чекпоинтом — коммитментом на
-`(seq, head_hash)`. Если чекпоинт опубликован во внешнем источнике, он
-фиксирует состояние журнала на момент времени:
+`(seq, head_hash, tree_size, root_hash)`. Если чекпоинт опубликован во внешнем
+источнике, он фиксирует состояние журнала на момент времени:
 
 ```bash
 sia-verifier attestation.json --checkpoint checkpoint.json
 ```
+
+## Шаг 5 (усиление). Проверьте включение в Merkle tree head
+
+Самая сильная проверка без выгрузки журнала: докажите, что конкретная запись
+входит в подписанный tree head. Аудит-путь сворачивается **локально** —
+серверу нельзя верить на слово даже в этом:
+
+```python
+from sia_sentinel import SentinelClient
+
+client = SentinelClient("https://sentinel.yourdomain.com")
+verdict = client.verify_inclusion("77f49f07c00f4f52b9810db7bedb308e")
+assert verdict["included"]  # leaf сворачивается в root_hash tree head
+```
+
+Три строки, и запись доказуемо находится в текущем состоянии журнала. SDK
+скачивает доказательство и tree head и сворачивает RFC 6962 audit path
+локально (stdlib, без доверия к ответу сервера). На стороне независимого
+верификатора то же самое выглядит так:
+
+```python
+import httpx
+from sia_verifier import verify_inclusion
+
+proof = httpx.get("https://sentinel.yourdomain.com/v1/ledger/inclusion/77f49f07...").json()
+head = httpx.get("https://sentinel.yourdomain.com/v1/ledger/head").json()
+
+assert verify_inclusion(
+    proof["entry_hash"], proof["leaf_index"],
+    head["tree_size"], head["root_hash"], proof["proof"],
+)
+```
+
+Если у вас есть два состояния журнала (например, внешний анкор и текущая
+голова), `GET /v1/ledger/consistency?from=&to=` + `verify_consistency`
+докажут, что история только дополнялась, но не переписывалась.
 
 ## Что верификатор НЕ проверяет (честно)
 
@@ -103,6 +139,8 @@ assert verdict.valid, verdict.reasons
 | Подпись + заявление | `sia-verifier attestation.json` | Квитанция подлинная, заявление не подделано |
 | + цепочка | `... --chain registry.jsonl` | Запись не удалена/подменена в журнале |
 | + чекпоинт | `... --checkpoint checkpoint.json` | Состояние журнала зафиксировано на дату |
+| + включение | `client.verify_inclusion(id)` | Запись входит в подписанный Merkle tree head |
+| + согласованность | `verify_consistency(from, to)` | История дополнялась, но не переписывалась |
 
 Полная спецификация формата: [`attestation-spec.md`](attestation-spec.md).
 Исходный код верификатора: [`verifier/`](../verifier/) в репозитории SIA Sentinel.

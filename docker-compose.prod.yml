@@ -35,6 +35,18 @@ services:
       - RECEIPTS_DIR=/app/data/receipts
       - WEBHOOKS_FILE=/app/data/webhooks.json
       - EVIDENCE_DIR=/app/data/evidence
+      # Анкоры на томе: синкай /app/data/anchors наружу (S3 WORM/git remote)
+      - ANCHORS_DIR=/app/data/anchors
+      # --- Внешняя поверхность ---
+      # Домен обязателен: без него портал верификации и бейджи с твоего же
+      # домена не работают (дефолт в cors.py — только localhost)
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:?CORS_ALLOW_ORIGINS is required, e.g. https://sentinel.yourdomain.com}
+      # Ставь 1 ТОЛЬКО за обратным прокси: иначе rate limit подделывается
+      # заголовком X-Forwarded-For (fail-closed дефолт правильный)
+      - TRUST_PROXY=${TRUST_PROXY:-}
+      # HTTP-транспорт анкоринга (POST подписанного чекпоинта во внешнее
+      # WORM-хранилище); файловый транспорт работает и без него
+      - ANCHOR_URL=${ANCHOR_URL:-}
       # --- Опционально ---
       - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - ENABLE_DEMO_LOGIN=${ENABLE_DEMO_LOGIN:-}

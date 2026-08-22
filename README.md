@@ -199,17 +199,47 @@ export JWT_SECRET_KEY=$(openssl rand -hex 32)
 export RECEIPT_SIGNING_KEY=$(openssl rand -hex 32)
 export EVIDENCE_SIGNING_KEY=$(openssl rand -hex 32)
 export POSTGRES_PASSWORD=$(openssl rand -hex 16)
+export CORS_ALLOW_ORIGINS=https://sentinel.yourdomain.com   # ваш домен
+
+# Только если API реально стоит за обратным прокси (nginx/traefik):
+export TRUST_PROXY=1
 
 docker compose -f docker-compose.prod.yml up -d
 ```
 
 `docker-compose.prod.yml` runs Sentinel + PostgreSQL. **All secrets are required
 with no defaults** — compose refuses to start without them. Runtime data
-(receipts, tenants, usage, invoices, API keys) lives on the `sentinel_data`
-volume; configure locations via `RECEIPTS_DIR`, `TENANTS_FILE`,
-`USAGE_EVENTS_FILE`, `INVOICES_FILE`, `API_KEYS_FILE`.
+(receipts, tenants, usage, invoices, API keys, anchors) lives on the
+`sentinel_data` volume.
+
+**Backup `RECEIPT_SIGNING_KEY` outside the server before day one.** Losing it
+without a prior key rotation makes every receipt issued so far unverifiable.
 
 Dev compose (SQLite, no required secrets): `docker compose up`.
+
+### Anchoring from record №1
+
+The value of a transparent log is monotonic in its history: every day of
+operation without external anchoring is a day you cannot later prove was not
+rewritten. A checkpoint stored next to the log proves exactly nothing.
+Enable anchoring before the first receipt:
+
+```bash
+# cron: anchor every hour + sync the staging dir to external storage
+# with an immutability policy (S3 Object Lock / WORM bucket, public git remote)
+0 * * * * cd /srv/sentinel && docker compose -f docker-compose.prod.yml exec -T sentinel python scripts/anchor_checkpoint.py
+30 * * * * aws s3 sync /srv/sentinel/data/anchors/ s3://sentinel-anchors/ --exact-timestamps
+```
+
+Or point `ANCHOR_URL` at a WORM-ingest endpoint and the HTTP transport posts
+each checkpoint at anchor time (SSRF-guarded). An auditor then compares the
+externally anchored `{seq, head_hash, tree_size, root_hash}` with the live
+chain head — if it does not extend the anchor, history was rewritten.
+
+Two more day-one rules: do **not** put `TRUST_PROXY=1` "just in case" (without
+a real reverse proxy it lets clients forge rate-limit identity via
+`X-Forwarded-For`), and do not advertise the deprecated firewall endpoints on
+the public domain — they are off the product surface for a reason.
 
 ---
 
