@@ -157,12 +157,15 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.post("/v1/verify-change")
+@app.post("/v1/verify-change", deprecated=True)
 def verify_change(
     request: VerifyChangeRequest,
     user: User = Depends(require_role(UserRole.ADMIN, UserRole.USER)),
 ) -> dict[str, Any]:
-    # Квота биллинга: verify-change — тоже аудит (категория audits)
+    """Legacy AI Code Change Firewall endpoint — not part of the
+    Proof-of-Savings product surface; kept for existing integrations.
+    """
+    # Квота биллинга: verify-change — тоже аудит (категория code)
     _check_quota_or_402(user.tenant_id, "code")
 
     trust_manager = _get_trust_manager(request.agent_id)
@@ -287,12 +290,12 @@ def verify_change(
     return evidence
 
 
-@app.post("/v1/risk-score")
+@app.post("/v1/risk-score", deprecated=True)
 def calculate_risk_score(
     request: RiskScoreRequest,
     user: User = Depends(require_role(UserRole.ADMIN, UserRole.USER)),
 ) -> dict[str, Any]:
-    """Calculate risk score for a code change without full verification."""
+    """Legacy firewall endpoint — not part of the Proof-of-Savings surface."""
     risk_assessment = policy_engine.assess_risk(
         agent_id=request.agent_id,
         target_path=request.target_path,
@@ -524,14 +527,21 @@ webhook_dispatcher = OutboundWebhookDispatcher()
 receipt_keyring = KeyringVerifier(receipt_generator.get_public_key())
 receipt_keyring.add_key(receipt_generator.kid, receipt_generator.get_public_key())
 
-# Генезис-декларация активного ключа в цепочке (идемпотентно: если kid уже
-# объявлен, повторно не пишем).
-if receipt_registry.resolve_key(receipt_generator.kid) is None:
-    receipt_registry.register_key_declaration(
-        kid=receipt_generator.kid,
-        public_key=receipt_generator.get_public_key(),
-        generator=receipt_generator,
-    )
+
+def _ensure_key_declared() -> None:
+    """C3: генезис-декларация активного ключа, если его ещё нет в цепочке.
+
+    Вызывается перед анкором/ротацией: любое состояние леджера, которое
+    уходит наружу для независимой проверки, обязано содержать декларацию
+    ключа — иначе верификатор не восстановит таблицу kid→ключ.
+    Идемпотентно: повторно не пишем.
+    """
+    if receipt_registry.resolve_key(receipt_generator.kid) is None:
+        receipt_registry.register_key_declaration(
+            kid=receipt_generator.kid,
+            public_key=receipt_generator.get_public_key(),
+            generator=receipt_generator,
+        )
 
 
 def _check_quota_or_402(tenant_id: str, kind: str) -> None:
@@ -1430,8 +1440,8 @@ def create_ledger_checkpoint(
 ) -> dict[str, Any]:
     """Sign and store a checkpoint anchoring the current chain head.
 
-    The signed commitment (seq, head_hash) can be published externally
-    to freeze the ledger state at a point in time. Admin only.
+    The signed commitment (seq, head_hash, tree head) can be published
+    externally to freeze the ledger state at a point in time. Admin only.
     """
     checkpoint = receipt_registry.create_checkpoint(receipt_generator)
 
@@ -1485,15 +1495,10 @@ def rotate_receipt_key(
     if new_generator.kid == old_generator.kid:
         raise HTTPException(status_code=409, detail="New key is identical to the current key")
 
-    # Если текущий ключ ещё не объявлен в этом реестре (реестр создан после
-    # старта), сначала пишем генезис-декларацию — иначе цепочка доверия
-    # начнётся с подписанта, которого нет в цепи
-    if receipt_registry.resolve_key(old_generator.kid) is None:
-        receipt_registry.register_key_declaration(
-            kid=old_generator.kid,
-            public_key=old_generator.get_public_key(),
-            generator=old_generator,
-        )
+    # Если текущий ключ ещё не объявлен в этом реестре, сначала пишем
+    # генезис-декларацию — иначе цепочка доверия начнётся с подписанта,
+    # которого нет в цепи
+    _ensure_key_declared()
 
     # Декларация нового ключа, подписанная СТАРЫМ активным ключом
     declaration_id = receipt_registry.register_key_declaration(
@@ -1543,7 +1548,15 @@ def anchor_ledger_checkpoint(
     Transports are picked up from the environment: the file transport
     always (ANCHORS_DIR, default ``anchors/``), the HTTP transport when
     ANCHOR_URL is set. Admin only.
+
+    Anchoring also writes the genesis key declaration (§3.2 spec), so the
+    externally published state is self-describing: a verifier can rebuild
+    the kid → key table from the anchored chain alone.
     """
+    if receipt_registry.head() is None:
+        raise HTTPException(status_code=409, detail="Ledger is empty — nothing to anchor")
+
+    _ensure_key_declared()
     checkpoint = receipt_registry.create_checkpoint(receipt_generator)
 
     if checkpoint is None:

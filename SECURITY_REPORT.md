@@ -97,7 +97,7 @@ integrity, operations, product hygiene) fully remediated:
 | B1–B4 (registry access) | `GET /v1/receipts` requires auth and is tenant-isolated; legacy endpoints gated by RBAC; billing accepts explicit `tenant_id` for platform admins |
 | C1–C4 (chain integrity) | RFC 6962 Merkle accumulator with inclusion/consistency proofs and signed tree heads; incremental chain verification with anchor-checked cache; key rotation via `kid` + chain-declared keys; external checkpoint anchoring (file + HTTP transports) |
 | D1–D14 (operations) | Working Makefile; full ruff+mypy in CI; tenant-isolated receipts; atomic state writes + crash-safe torn-tail ledger recovery; null-byte/control-char JSON validation in middleware; `X-Forwarded-For` only with `TRUST_PROXY=1`; SSRF guard on webhooks (subscribe + delivery); FastAPI metadata; compose volumes for all runtime state; fully state-isolated test suite (`discover -t .`) |
-| E1–E7 (hygiene) | Positioning texts fixed; placeholder domains annotated; dated model pricing (`prices_as_of`, `catalog_version`) in manifests/commitments; simulated-mode caveats; RCE claim refuted — `kind=code` is CLI-only, blocked at all API endpoints |
+| E1–E7 (hygiene) | Positioning texts fixed; placeholder domains annotated; dated model pricing (`prices_as_of`, `catalog_version`) in manifests/commitments; simulated-mode caveats; E6 closed (required `expect_contains` validation + `caveat` field); E7 hardened — audited code never runs in the API process: test execution moved to killable child processes (timeout + terminate/kill; crash = test failure), and `kind=code` remains CLI-only; legacy firewall endpoints (`/v1/verify-change`, `/v1/risk-score`) marked `deprecated` — off the advertised surface, kept for existing integrations |
 
 ---
 
@@ -131,7 +131,7 @@ integrity, operations, product hygiene) fully remediated:
 
 ### Availability
 - Persistent job queue with crash recovery
-- Benchmark isolation in a killable child process
+- Benchmark AND test execution of audited code isolated in killable child processes (timeout → terminate → kill; crash counts as test failure, never an auditor crash)
 - Atomic persistence for keys/registry state (`mkstemp` + `fsync` + `os.replace`)
 - Crash-safe ledger: durable single-line appends (`fsync`), torn trailing line detected/dropped/logged and physically truncated before the next append
 

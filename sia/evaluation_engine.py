@@ -81,6 +81,34 @@ def _benchmark_process(
         pass
 
 
+def _run_tests_process(
+    code: str,
+    test_code: str,
+    result_queue: "multiprocessing.Queue",
+) -> None:
+    """Точка входа дочернего процесса прогона тестов (E7).
+
+    Аудитируемый код и тест исполняются ЗДЕСЬ, в отдельном процессе, а
+    не в процессе Sentinel: падение (включая sys.exit/segfault) не
+    затрагивает аудитора. На уровне модуля — чтобы быть picklable на
+    Windows (spawn).
+    """
+    namespace: dict[str, Any] = {}
+    payload: tuple[bool, Optional[str]]
+
+    try:
+        exec(compile(code, "<string>", "exec"), namespace)
+        exec(compile(test_code, "<string>", "exec"), namespace)
+        payload = (True, None)
+    except BaseException as exc:  # noqa: BLE001 — статус булев, текст не важен
+        payload = (False, f"{type(exc).__name__}: {exc}")
+
+    try:
+        result_queue.put(payload)
+    except Exception:
+        pass
+
+
 # z-значения для стандартных уровней доверия (без scipy)
 _Z_SCORES = {
     0.90: 1.6448536269514722,
@@ -611,14 +639,38 @@ class EvaluationEngine:
 
         return payload
 
-    def _run_tests(self, code: str, test_code: str) -> bool:
-        namespace: dict[str, Any] = {}
+    def _run_tests(self, code: str, test_code: str, timeout: float = 30.0) -> bool:
+        """Прогоняет тест в отдельном убиваемом процессе (E7).
+
+        Аудитируемый код никогда не исполняется в процессе Sentinel:
+        зависание обрывается по таймауту (terminate → kill), падение
+        дочернего процесса (включая sys.exit и крахи на уровне C)
+        считается провалом теста, а не аварией аудитора.
+        """
+        result_queue: multiprocessing.Queue = multiprocessing.Queue()
+        process = multiprocessing.Process(
+            target=_run_tests_process,
+            args=(code, test_code, result_queue),
+        )
+        process.start()
+        process.join(timeout)
+
+        if process.is_alive():
+            process.terminate()
+            process.join(1.0)
+
+            if process.is_alive():
+                process.kill()
+                process.join(1.0)
+
+            return False  # зависание = провал теста
+
         try:
-            exec(code, namespace)
-            exec(test_code, namespace)
-            return True
+            status, _ = result_queue.get_nowait()
         except Exception:
-            return False
+            return False  # процесс умер, не оставив результата
+
+        return status
 
     @staticmethod
     def _detect_function_name(code: str) -> Optional[str]:

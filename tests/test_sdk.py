@@ -187,6 +187,95 @@ class SDKTestCase(unittest.TestCase):
             attestation = client.get_attestation(registry_id)
             self.assertEqual(attestation["attestation_id"], registry_id)
 
+    def test_ledger_proofs_and_key_declarations(self) -> None:
+        """A6: SDK-клиент для Merkle-доказательств, tree head и ключей."""
+        import os
+
+        import sia_verifier
+
+        original_anchors = os.environ.get("ANCHORS_DIR")
+        os.environ["ANCHORS_DIR"] = str(Path(self._tmp.name) / "anchors")
+
+        try:
+            with self._client() as client:
+                first = client.run_audit(LLM_FLOW)["registry_id"]
+                client.run_audit(LLM_FLOW)
+
+                head = client.ledger_head()
+                self.assertEqual(head["tree_size"], 2)
+                self.assertIsNotNone(head["root_hash"])
+
+                # Inclusion proof: локальный фолд + независимый верификатор
+                proof = client.inclusion_proof(first)
+                self.assertEqual(proof["leaf_index"], 0)
+                self.assertEqual(proof["tree_size"], 2)
+                self.assertTrue(
+                    sia_verifier.verify_inclusion(
+                        proof["entry_hash"],
+                        proof["leaf_index"],
+                        proof["tree_size"],
+                        proof["root_hash"],
+                        proof["proof"],
+                    )
+                )
+
+                # Одна строка — и запись проверена против текущего tree head
+                verdict = client.verify_inclusion(first)
+                self.assertTrue(verdict["included"])
+                self.assertEqual(verdict["root_hash"], head["root_hash"])
+
+                # Consistency proof: дерево размера 2 продолжает дерево размера 1
+                consistency = client.consistency_proof(1, 2)
+                self.assertTrue(
+                    sia_verifier.verify_consistency(
+                        consistency["from_size"],
+                        consistency["from_root"],
+                        consistency["to_size"],
+                        consistency["to_root"],
+                        consistency["proof"],
+                    )
+                )
+
+                # Полная верификация цепочки от генезиса
+                full = client.verify_ledger(full=True)
+                self.assertTrue(full["valid"])
+                self.assertFalse(full["incremental"])
+
+                # Анкор пишет в цепочку генезис-декларацию активного ключа
+                anchor = client.anchor_checkpoint()
+                self.assertTrue(anchor["anchored"])
+
+                # Декларации ключей: активный kid объявлен в цепочке
+                keys = client.key_declarations()
+                self.assertGreaterEqual(keys["count"], 1)
+                declared = {d["declaration"]["kid"] for d in keys["declarations"]}
+                self.assertIn(keys["active_kid"], declared)
+        finally:
+            if original_anchors is None:
+                os.environ.pop("ANCHORS_DIR", None)
+            else:
+                os.environ["ANCHORS_DIR"] = original_anchors
+
+    def test_anchor_checkpoint_via_sdk(self) -> None:
+        """A6: анкоринг чекпоинта через SDK (файловый транспорт в temp)."""
+        import os
+
+        original = os.environ.get("ANCHORS_DIR")
+        os.environ["ANCHORS_DIR"] = str(Path(self._tmp.name) / "anchors")
+
+        try:
+            with self._client() as client:
+                client.run_audit(LLM_FLOW)
+                result = client.anchor_checkpoint()
+
+            self.assertTrue(result["anchored"])
+            self.assertEqual(result["anchors"][0]["transport"], "file")
+        finally:
+            if original is None:
+                os.environ.pop("ANCHORS_DIR", None)
+            else:
+                os.environ["ANCHORS_DIR"] = original
+
     def test_usage_and_billing(self) -> None:
         with self._client() as client:
             client.run_audit(LLM_FLOW)

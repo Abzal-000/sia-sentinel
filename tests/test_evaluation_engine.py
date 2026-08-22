@@ -55,6 +55,45 @@ def heavy_sum(n):
         # разумный запас на запуск процесса и завершение
         self.assertLess(elapsed, 15.0)
 
+    def test_run_tests_kills_hung_code(self) -> None:
+        # E7: зависший аудитируемый код не исполняется в процессе
+        # Sentinel — его процесс убивается по таймауту, тест считается
+        # проваленным, аудит продолжает работу
+        import time
+
+        hung_code = "while True:\n    pass\n"
+
+        start = time.monotonic()
+        result = self.engine._run_tests(hung_code, "assert True", timeout=2.0)
+        elapsed = time.monotonic() - start
+
+        self.assertFalse(result)
+        self.assertLess(elapsed, 15.0)
+
+    def test_run_tests_hard_crash_is_test_failure(self) -> None:
+        # E7: жёсткий крах дочернего процесса (os._exit) — провал теста,
+        # а не авария процесса-аудитора
+        crashing_code = "import os\nos._exit(1)\n"
+
+        result = self.engine._run_tests(crashing_code, "assert True", timeout=10.0)
+
+        self.assertFalse(result)
+
+    def test_run_tests_system_exit_is_test_failure(self) -> None:
+        # E7: sys.exit() в аудитируемом коде не должен покидать аудитора
+        exiting_code = "import sys\nsys.exit(3)\n"
+
+        result = self.engine._run_tests(exiting_code, "assert True", timeout=10.0)
+
+        self.assertFalse(result)
+
+    def test_run_tests_passing_code_in_child_process(self) -> None:
+        # Позитивный контроль: корректный код проходит тест в дочернем процессе
+        good_code = "def add(a, b):\n    return a + b\n"
+        test_code = "assert add(2, 2) == 4\n"
+
+        self.assertTrue(self.engine._run_tests(good_code, test_code, timeout=10.0))
+
     def test_calculate_safety_score_perfect(self) -> None:
         safety = SafetyCheckResult(approved=True, violations=(), warnings=())
         execution = ExecutionResult(success=True, exit_code=0)

@@ -92,6 +92,7 @@ A receipt binds a claim to the audited artifact:
 | `nonce` | string | SHA-256 hex of `timestamp + receipt_id`. |
 | `signature` | string | Base64 Ed25519 signature (below). |
 | `manifest` | object \| null | Optional reproducibility manifest (environment, dataset/config hashes, seeds, pricing) — **covered by the signature when present**. |
+| `kid` | string \| null | Key identifier of the signing key (`SHA256(raw public key)[:16]` hex) — see §3.2. Present on receipts issued after key rotation was introduced; **covered by the signature when present**. |
 
 ### 2.1 Commitment construction
 
@@ -106,12 +107,16 @@ The signed commitment is the **canonical JSON** serialization of:
   "trust_level": "JUNIOR",
   "timestamp": 1724000000.0,
   "nonce": "...",
-  "manifest": { ... }   // included only when manifest is not null
+  "manifest": { ... },  // included only when manifest is not null
+  "kid": "0123456789abcdef"  // included only when kid is not null
 }
 ```
 
 `receipt_id` is part of the commitment so a signature cannot be lifted off
-one receipt and replayed against a different `receipt_id`.
+one receipt and replayed against a different `receipt_id`. `kid` is included
+whenever the receipt carries one, binding the signature to the exact key that
+produced it — omit it from the commitment only for receipts without `kid`
+(legacy pre-rotation receipts).
 
 Canonical JSON = `json.dumps(obj, sort_keys=True, separators=(",", ":"))`,
 UTF-8 encoded. The signature is Ed25519 (RFC 8032) over those bytes,

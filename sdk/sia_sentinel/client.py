@@ -6,12 +6,43 @@
 """
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import Any, Optional
 
 import httpx
 
 _TERMINAL_STATUSES = ("completed", "failed")
+
+
+def _fold_inclusion_proof(
+    entry_hash: str, proof: list[dict[str, str]], root_hash: Optional[str]
+) -> bool:
+    """Локальная проверка Merkle inclusion proof (RFC 6962 §2.1).
+
+    Вторая, независимая от сервера реализация спеки: лист
+    SHA256(0x00||entry_hash), узел SHA256(0x01||left||right); шаг
+    доказательства сворачивается по направлению брата.
+    """
+    if not root_hash:
+        return False
+
+    fn = hashlib.sha256(b"\x00" + bytes.fromhex(entry_hash)).hexdigest()
+
+    for step in proof:
+        sibling = step.get("hash", "")
+        direction = step.get("direction")
+
+        if direction == "left":
+            combined = b"\x01" + bytes.fromhex(sibling) + bytes.fromhex(fn)
+        elif direction == "right":
+            combined = b"\x01" + bytes.fromhex(fn) + bytes.fromhex(sibling)
+        else:
+            return False
+
+        fn = hashlib.sha256(combined).hexdigest()
+
+    return fn == root_hash
 
 
 class SentinelAPIError(Exception):
@@ -183,8 +214,63 @@ class SentinelClient:
     def ledger_head(self) -> dict[str, Any]:
         return self._get("/v1/ledger/head")
 
-    def verify_ledger(self) -> dict[str, Any]:
-        return self._get("/v1/ledger/verify")
+    def verify_ledger(self, full: bool = False) -> dict[str, Any]:
+        """Chain verification; full=True re-verifies from genesis."""
+        return self._get(
+            "/v1/ledger/verify", params={"full": str(bool(full)).lower()}
+        )
+
+    def inclusion_proof(self, registry_id: str) -> dict[str, Any]:
+        """Merkle inclusion proof for a registry entry (RFC 6962)."""
+        return self._get(f"/v1/ledger/inclusion/{registry_id}")
+
+    def consistency_proof(
+        self, from_size: int, to_size: Optional[int] = None
+    ) -> dict[str, Any]:
+        """Merkle consistency proof between two tree heads (RFC 6962)."""
+        params: dict[str, Any] = {"from": from_size}
+
+        if to_size is not None:
+            params["to"] = to_size
+
+        return self._get("/v1/ledger/consistency", params=params)
+
+    def key_declarations(self) -> dict[str, Any]:
+        """Key declarations from the chain (kid → public key history)."""
+        return self._get("/v1/ledger/keys")
+
+    def anchor_checkpoint(self) -> dict[str, Any]:
+        """Create a checkpoint and publish it to external anchor storage.
+
+        Platform admin only.
+        """
+        return self._post("/v1/ledger/anchor", json={})
+
+    def verify_inclusion(self, registry_id: str) -> dict[str, Any]:
+        """Однострочная проверка включения записи в Merkle tree head.
+
+        Скачивает доказательство и текущий tree head и сворачивает
+        audit path ЛОКАЛЬНО (RFC 6962 §2.1: H(0x00||leaf),
+        H(0x01||left||right)) — без доверия к серверу. Возвращает
+        {included, leaf_index, tree_size, root_hash, entry_hash}.
+        """
+        proof = self.inclusion_proof(registry_id)
+        head = self.ledger_head()
+
+        included = _fold_inclusion_proof(
+            entry_hash=proof["entry_hash"],
+            proof=proof.get("proof") or [],
+            root_hash=head["root_hash"],
+        )
+
+        return {
+            "included": included,
+            "registry_id": registry_id,
+            "entry_hash": proof["entry_hash"],
+            "leaf_index": proof["leaf_index"],
+            "tree_size": proof["tree_size"],
+            "root_hash": head["root_hash"],
+        }
 
     def get_attestation(self, registry_id: str) -> dict[str, Any]:
         return self._get(f"/v1/attestations/{registry_id}")
