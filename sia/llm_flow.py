@@ -185,17 +185,28 @@ class SimulatedLLMClient:
 class OpenAICompatibleClient:
     """Живой клиент для OpenAI-совместимых API (lazy import openai)."""
 
-    def __init__(self, config: LLMEndpointConfig, request_timeout: float = 60.0):
+    def __init__(
+        self,
+        config: LLMEndpointConfig,
+        request_timeout: float = 60.0,
+        max_retries: int = 8,
+    ):
         from openai import OpenAI
 
         if not config.api_key:
             raise ValueError(f"Live endpoint {config.model_name!r} requires api_key")
 
         self.config = config
+        # SDK сам повторяет 408/409/429/5xx с экспоненциальным backoff и
+        # уважает Retry-After — замедление происходит ровно тогда, когда
+        # пул занят (общий бесплатный пул NIM), и не трогает остальное время.
+        # Худший случай зависшего вызова: request_timeout × (max_retries + 1)
+        # ≈ 540 с при дефолтах — нормально для пакетного прогона, знать стоит.
         self._client = OpenAI(
             api_key=config.api_key,
             base_url=config.base_url,
             timeout=request_timeout,
+            max_retries=max_retries,
         )
 
     def complete(self, prompt: str, expect: Optional[str] = None) -> CompletionResult:

@@ -201,5 +201,36 @@ class LLMFlowAuditorTestCase(unittest.TestCase):
         )
 
 
+class LiveClientRetryTestCase(unittest.TestCase):
+    """Пункт 1 плана маяка: backoff-повторы SDK вместо глобального троттла.
+
+    SDK сам повторяет 408/409/429/5xx с экспоненциальным backoff и уважает
+    Retry-After; max_retries=8 даёт пробе на общем бесплатном пуле запас
+    против 429. Худший случай зависшего вызова: timeout × (retries+1) ≈ 540 c.
+    """
+
+    def _client(self, **kwargs):
+        from sia.llm_flow import LLMEndpointConfig, OpenAICompatibleClient
+
+        config = LLMEndpointConfig(
+            model_name="test-model",
+            base_url="https://example.com/v1",
+            api_key="test-key",
+        )
+        return OpenAICompatibleClient(config, **kwargs)
+
+    def test_default_max_retries_is_eight(self) -> None:
+        client = self._client()
+
+        self.assertEqual(client._client.max_retries, 8)
+        self.assertEqual(client._client.timeout, 60.0)
+
+    def test_explicit_retry_and_timeout_propagate(self) -> None:
+        client = self._client(request_timeout=30.0, max_retries=3)
+
+        self.assertEqual(client._client.max_retries, 3)
+        self.assertEqual(client._client.timeout, 30.0)
+
+
 if __name__ == "__main__":
     unittest.main()
