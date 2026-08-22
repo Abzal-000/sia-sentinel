@@ -37,6 +37,9 @@ COPY sia/ ./sia/
 COPY sentinel/ ./sentinel/
 COPY dashboard/ ./dashboard/
 COPY policies/ ./policies/
+# scripts/ нужен в образе: scripts/anchor_checkpoint.py гоняется кроном
+# ЧЕРЕЗ docker compose exec (блокер 2 мини-аудита: крон падал, файла не было)
+COPY scripts/ ./scripts/
 
 RUN useradd -m -u 1000 siauser && \
     chown -R siauser:siauser /app

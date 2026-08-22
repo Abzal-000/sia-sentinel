@@ -85,3 +85,6 @@ artifacts/
 
 # Anchored checkpoints (runtime staging for external sync)
 anchors/
+
+# Prod bind-mount runtime state (compose ./data)
+data/

@@ -44,7 +44,7 @@ docs
 # Tests and examples
 tests
 examples
-scripts
+scripts/oneoff
 benchmark_report.json
 
 # Docker files themselves

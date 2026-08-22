@@ -196,24 +196,40 @@ itemized on the period invoice.
 
 ```bash
 export JWT_SECRET_KEY=$(openssl rand -hex 32)
-export RECEIPT_SIGNING_KEY=$(openssl rand -hex 32)
+export RECEIPT_SIGNING_KEY=$(openssl rand -hex 32)    # СВЕРЬТЕ С БЭКАПОМ
 export EVIDENCE_SIGNING_KEY=$(openssl rand -hex 32)
 export POSTGRES_PASSWORD=$(openssl rand -hex 16)
-export CORS_ALLOW_ORIGINS=https://sentinel.yourdomain.com   # ваш домен
+export PLATFORM_ADMIN_API_KEY=$(openssl rand -hex 32) # админ для анкоринга
+export DOMAIN=sentinel.yourdomain.com
+export ACME_EMAIL=ops@yourdomain.com
 
-# Только если API реально стоит за обратным прокси (nginx/traefik):
-export TRUST_PROXY=1
+# Bind-монты: контейнер пишет под uid 1000 — каталоги должны быть его
+mkdir -p data logs && sudo chown -R 1000:1000 data logs
 
 docker compose -f docker-compose.prod.yml up -d
 ```
 
-`docker-compose.prod.yml` runs Sentinel + PostgreSQL. **All secrets are required
-with no defaults** — compose refuses to start without them. Runtime data
-(receipts, tenants, usage, invoices, API keys, anchors) lives on the
-`sentinel_data` volume.
+`docker-compose.prod.yml` runs **Caddy (automatic TLS) + Sentinel +
+PostgreSQL**. All secrets are required with no defaults — compose refuses to
+start without them. Runtime data (receipts, tenants, usage, invoices, API
+keys, anchors) lives in the host-visible `./data` directory, ready for
+external sync.
 
-**Backup `RECEIPT_SIGNING_KEY` outside the server before day one.** Losing it
-without a prior key rotation makes every receipt issued so far unverifiable.
+Three things worth stating explicitly:
+
+- **TLS is not cosmetic.** The badge embedded into any HTTPS page is blocked
+  as mixed content over plain HTTP — without Caddy in front, the main viral
+  element renders for no one, and API keys travel in cleartext. Sentinel
+  itself publishes no ports; the only public surface is Caddy's 443.
+- **`PLATFORM_ADMIN_API_KEY` bootstraps the operator.** On a fresh volume
+  there is no way to become a platform admin (signup issues tenant admins,
+  the demo login is off in prod) — while anchoring, checkpoints, key
+  rotation and tenant management require exactly that privilege. At startup
+  the key from this env is registered (hashed at rest, idempotent) as the
+  `platform-admin-bootstrap` key.
+- **Backup `RECEIPT_SIGNING_KEY` outside the server before day one.** Losing
+  it without a prior key rotation makes every receipt issued so far
+  unverifiable.
 
 Dev compose (SQLite, no required secrets): `docker compose up`.
 
@@ -222,7 +238,12 @@ Dev compose (SQLite, no required secrets): `docker compose up`.
 The value of a transparent log is monotonic in its history: every day of
 operation without external anchoring is a day you cannot later prove was not
 rewritten. A checkpoint stored next to the log proves exactly nothing.
-Enable anchoring before the first receipt:
+
+Note the exact acceptance criterion: you cannot anchor an empty ledger, so
+"anchoring from record №1" means the cron and the external sync are
+**installed and verified before the first audit**, and the first anchor
+appears immediately after the first receipt — **checked with your own eyes**
+both in `./data/anchors/` and in the external storage:
 
 ```bash
 # cron: anchor every hour + sync the staging dir to external storage
@@ -231,14 +252,15 @@ Enable anchoring before the first receipt:
 30 * * * * aws s3 sync /srv/sentinel/data/anchors/ s3://sentinel-anchors/ --exact-timestamps
 ```
 
-Or point `ANCHOR_URL` at a WORM-ingest endpoint and the HTTP transport posts
-each checkpoint at anchor time (SSRF-guarded). An auditor then compares the
-externally anchored `{seq, head_hash, tree_size, root_hash}` with the live
-chain head — if it does not extend the anchor, history was rewritten.
+The script refuses to run without `RECEIPT_SIGNING_KEY` in the environment —
+an ephemeral key would sign checkpoints that no verifier accepts, silently.
+`ANCHOR_URL` is an alternative for **unauthenticated** ingest endpoints only
+(it sends no Authorization header); for S3-style buckets use the file
+transport + `aws s3 sync` from the host as above. An auditor then compares
+the externally anchored `{seq, head_hash, tree_size, root_hash}` with the
+live chain head — if it does not extend the anchor, history was rewritten.
 
-Two more day-one rules: do **not** put `TRUST_PROXY=1` "just in case" (without
-a real reverse proxy it lets clients forge rate-limit identity via
-`X-Forwarded-For`), and do not advertise the deprecated firewall endpoints on
+One more day-one rule: do not advertise the deprecated firewall endpoints on
 the public domain — they are off the product surface for a reason.
 
 ---
@@ -265,7 +287,7 @@ sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, web
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
 docs/           Attestation spec + JSON Schema
-tests/          569 tests (unittest)
+tests/          575 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
@@ -273,6 +295,6 @@ audit_cli.py    CLI: audit / optimize / sign / verify
 ## Status
 
 Prototype-stage, fully working core: live pilots against NVIDIA NIM endpoints
-have verified real savings claims; the test suite (569 tests) covers the audit
+have verified real savings claims; the test suite (575 tests) covers the audit
 engine, ledger, tenancy, billing, jobs persistence, public attestation network,
 self-service onboarding, and the SDK. See `SECURITY_REPORT.md` for the security review.

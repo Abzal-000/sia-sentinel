@@ -21,6 +21,7 @@ ledger) и RECEIPT_SIGNING_KEY (ключ подписи чекпоинтов). �
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
@@ -33,6 +34,19 @@ from sentinel.receipt_registry import ReceiptRegistry  # noqa: E402
 
 
 def main() -> int:
+    # Худший класс отказа — молча подписать эфемерным ключом: ReceiptGenerator
+    # без RECEIPT_SIGNING_KEY генерирует случайный, чекпоинты уходят
+    # подписанными ключом, которого нет ни в одной декларации, и любой
+    # верификатор их отвергнет. Отказываемся громко и сразу.
+    if not os.getenv("RECEIPT_SIGNING_KEY"):
+        print(
+            "FATAL: RECEIPT_SIGNING_KEY is not set — refusing to sign a "
+            "checkpoint with an ephemeral key (every verifier would reject "
+            "it, and the failure would be silent).",
+            file=sys.stderr,
+        )
+        return 3
+
     registry = ReceiptRegistry()
     generator = ReceiptGenerator()
 

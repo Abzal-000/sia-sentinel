@@ -86,6 +86,14 @@ setup_cors(app)
 rate_limiter = RateLimiter()
 app.add_middleware(SecurityMiddleware, rate_limiter=rate_limiter)
 
+# Deploy bootstrap: на свежем томе платформенного админа получить нечем
+# (signup выдаёт админа тенанта, демо-логин в проде выключен), а анкоринг,
+# чекпоинты, ротация и управление тенантами требуют именно его.
+PLATFORM_ADMIN_API_KEY = os.getenv("PLATFORM_ADMIN_API_KEY")
+
+if PLATFORM_ADMIN_API_KEY:
+    api_key_manager.bootstrap_platform_admin(PLATFORM_ADMIN_API_KEY)
+
 guard = ConstitutionalAILayer()
 evidence_store = EvidenceStore()
 policy_engine = PolicyEngine()

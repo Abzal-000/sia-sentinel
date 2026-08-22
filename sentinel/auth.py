@@ -199,15 +199,25 @@ class APIKeyManager:
         expires_in_days: Optional[int] = None,
         tenant_id: str = "default",
         is_platform_admin: bool = False,
+        key_material: Optional[str] = None,
     ) -> tuple[str, APIKey]:
         """
         Create new API key.
 
+        Args:
+            key_material: явный материал ключа (например, из env для
+                bootstrap платформенного админа). На диск попадает только
+                хеш, как и у сгенерированных ключей. По умолчанию
+                генерируется случайно.
+
         Returns:
             Tuple of (plain_key, APIKey object)
         """
+        if key_material is not None and not key_material.strip():
+            raise ValueError("key_material must be non-empty when provided")
+
         key_id = secrets.token_urlsafe(16)
-        plain_key = secrets.token_urlsafe(32)
+        plain_key = key_material if key_material is not None else secrets.token_urlsafe(32)
         hashed_key = self._hash_key(plain_key)
 
         created_at = datetime.now(timezone.utc).isoformat()
@@ -281,6 +291,43 @@ class APIKeyManager:
             self.keys[key_id].is_active = False
             self._save_keys()
         return True
+
+    def bootstrap_platform_admin(self, key_material: str) -> Optional[APIKey]:
+        """Создать платформенного админа, если его ещё нет (deploy bootstrap).
+
+        На свежем томе платформенного админа получить нечем: signup выдаёт
+        только админа тенанта, демо-логин в проде выключен — а анкоринг,
+        чекпоинты, ротация ключей и управление тенантами требуют именно
+        его. Ключ задаётся env-переменной PLATFORM_ADMIN_API_KEY и на диск
+        попадает только хешем.
+
+        Идемпотентно: если активный платформенный админ уже существует
+        (включая созданный через API), ничего не делает и возвращает None.
+        Смена env-значения требует ревока старого bootstrap-ключа через API.
+        """
+        if not key_material.strip():
+            raise ValueError("PLATFORM_ADMIN_API_KEY must be non-empty")
+
+        with self._lock:
+            has_admin = any(
+                k.is_platform_admin and k.is_active for k in self.keys.values()
+            )
+
+        if has_admin:
+            return None
+
+        _, api_key = self.create_key(
+            name="platform-admin-bootstrap",
+            role=UserRole.ADMIN,
+            is_platform_admin=True,
+            key_material=key_material,
+        )
+        print(
+            "BOOTSTRAP: created platform admin API key 'platform-admin-bootstrap' "
+            "from PLATFORM_ADMIN_API_KEY (anchoring/checkpoints/rotation/tenant "
+            "management are now operable)"
+        )
+        return api_key
 
     def list_keys(self) -> list[APIKey]:
         """List all API keys."""

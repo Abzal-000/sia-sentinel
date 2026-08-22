@@ -287,5 +287,32 @@ class AnchorAPITestCase(unittest.TestCase):
         )
 
 
+class AnchorScriptTestCase(unittest.TestCase):
+    """Блокер 3 мини-аудита: скрипт отказывается работать без ключа подписи."""
+
+    def test_refuses_without_receipt_signing_key(self) -> None:
+        import subprocess
+        import sys
+
+        env = {
+            k: v
+            for k, v in os.environ.items()
+            if k != "RECEIPT_SIGNING_KEY"
+        }
+        env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
+
+        result = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "anchor_checkpoint.py")],
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=60,
+        )
+
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("RECEIPT_SIGNING_KEY", result.stderr)
+        self.assertIn("ephemeral", result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()

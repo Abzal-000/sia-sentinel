@@ -3,12 +3,16 @@ Tests for authentication and authorization.
 """
 
 import os
+import tempfile
 import unittest
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+import sentinel.api as api_module
+import sentinel.auth as auth_module
 from sentinel.api import app, rate_limiter
-from sentinel.auth import UserRole, jwt_manager
+from sentinel.auth import APIKeyManager, UserRole, jwt_manager
 
 
 class AuthTestCase(unittest.TestCase):
@@ -317,6 +321,94 @@ class JWTManagerTestCase(unittest.TestCase):
 
         user = jwt_manager.validate_token(token)
         self.assertIsNone(user)
+
+
+class PlatformAdminBootstrapTestCase(unittest.TestCase):
+    """Deploy bootstrap: PLATFORM_ADMIN_API_KEY создаёт оператора на свежем томе.
+
+    Без него на свежем деплое недоступны анкоринг, чекпоинты, ротация ключей
+    и управление тенантами (блокер 1 мини-аудита).
+    """
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.manager = APIKeyManager(str(Path(self._tmp.name) / "api_keys.json"))
+        rate_limiter.reset()
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def test_bootstrap_creates_platform_admin_on_fresh_store(self) -> None:
+        created = self.manager.bootstrap_platform_admin("sk-bootstrap-secret")
+
+        self.assertIsNotNone(created)
+        self.assertTrue(created.is_platform_admin)
+        self.assertEqual(created.role, UserRole.ADMIN)
+
+        # Ключ из env реально проходит валидацию с платформенными правами
+        api_key = self.manager.validate_key("sk-bootstrap-secret")
+        self.assertIsNotNone(api_key)
+        self.assertTrue(api_key.is_platform_admin)
+
+        # На диске — только хеш, не сам ключ
+        stored = Path(self._tmp.name, "api_keys.json").read_text(encoding="utf-8")
+        self.assertNotIn("sk-bootstrap-secret", stored)
+
+    def test_bootstrap_is_idempotent(self) -> None:
+        first = self.manager.bootstrap_platform_admin("sk-bootstrap-secret")
+        second = self.manager.bootstrap_platform_admin("sk-other-value")
+
+        self.assertIsNotNone(first)
+        self.assertIsNone(second)  # платформенный админ уже есть — не создаём
+
+        # Старый ключ продолжает работать
+        self.assertIsNotNone(self.manager.validate_key("sk-bootstrap-secret"))
+
+    def test_bootstrap_skips_when_platform_admin_exists(self) -> None:
+        self.manager.create_key(
+            name="operator", role=UserRole.ADMIN, is_platform_admin=True
+        )
+
+        created = self.manager.bootstrap_platform_admin("sk-bootstrap-secret")
+
+        self.assertIsNone(created)
+        self.assertIsNone(self.manager.validate_key("sk-bootstrap-secret"))
+
+    def test_bootstrap_rejects_empty_material(self) -> None:
+        with self.assertRaises(ValueError):
+            self.manager.bootstrap_platform_admin("   ")
+
+    def test_bootstrapped_key_passes_platform_admin_endpoint(self) -> None:
+        """Ключ из bootstrap проходит require_platform_admin на живом API."""
+        original_manager = auth_module.api_key_manager
+        original_api_manager = api_module.api_key_manager
+        auth_module.api_key_manager = self.manager
+        api_module.api_key_manager = self.manager
+
+        original_demo_login = os.environ.get("ENABLE_DEMO_LOGIN")
+        os.environ.pop("ENABLE_DEMO_LOGIN", None)  # прод-режим: демо-логина нет
+
+        try:
+            self.manager.bootstrap_platform_admin("sk-bootstrap-secret")
+            client = TestClient(app)
+
+            # Анкоринг на пустом леджере даст 409 — но это ответ
+            # ЭНДПОИНТА, а не 401/403 от require_platform_admin
+            response = client.post(
+                "/v1/ledger/anchor", headers={"X-API-Key": "sk-bootstrap-secret"}
+            )
+            self.assertEqual(response.status_code, 409)
+
+            # Без ключа — 401: путь действительно был закрыт
+            self.assertEqual(client.post("/v1/ledger/anchor").status_code, 401)
+        finally:
+            auth_module.api_key_manager = original_manager
+            api_module.api_key_manager = original_api_manager
+
+            if original_demo_login is None:
+                os.environ.pop("ENABLE_DEMO_LOGIN", None)
+            else:
+                os.environ["ENABLE_DEMO_LOGIN"] = original_demo_login
 
 
 if __name__ == "__main__":

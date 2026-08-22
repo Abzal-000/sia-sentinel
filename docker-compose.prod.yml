@@ -1,13 +1,20 @@
-# Production deployment: Sentinel API + PostgreSQL.
+# Production deployment: Caddy (TLS) + Sentinel API + PostgreSQL.
 #
 # Все секреты ОБЯЗАТЕЛЬНЫ и не имеют значений по умолчанию — compose
 # откажется стартовать, пока они не заданы. Перед запуском:
 #
 #   export JWT_SECRET_KEY=$(openssl rand -hex 32)
-#   export RECEIPT_SIGNING_KEY=$(openssl rand -hex 32)
+#   export RECEIPT_SIGNING_KEY=$(openssl rand -hex 32)   # СВЕРЬТЕ С БЭКАПОМ!
 #   export EVIDENCE_SIGNING_KEY=$(openssl rand -hex 32)
 #   export POSTGRES_PASSWORD=<strong-password>
+#   export PLATFORM_ADMIN_API_KEY=$(openssl rand -hex 32)
+#   export DOMAIN=sentinel.yourdomain.com
+#   export ACME_EMAIL=ops@yourdomain.com
 #   export NVIDIA_API_KEY=nvapi-...        # только для live-аудитов LLM
+#
+# Хостовые каталоги для bind-монтирования (контейнер пишет под uid 1000):
+#
+#   mkdir -p data logs && sudo chown -R 1000:1000 data logs
 #
 # ENABLE_DEMO_LOGIN по умолчанию пуст (демо-логин выключен). Не включайте
 # его в продакшене.
@@ -17,17 +24,21 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    ports:
-      - "8000:8000"
+    # Публично сервис не публикуется: снаружи — только через Caddy (TLS).
+    # Для отладки на хосте раскомментируйте:
+    # ports:
+    #   - "127.0.0.1:8000:8000"
     environment:
       - PYTHONPATH=/app
       # --- Обязательные секреты ---
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - RECEIPT_SIGNING_KEY=${RECEIPT_SIGNING_KEY:?RECEIPT_SIGNING_KEY is required}
       - EVIDENCE_SIGNING_KEY=${EVIDENCE_SIGNING_KEY:?EVIDENCE_SIGNING_KEY is required}
+      # --- Deploy bootstrap: платформенный админ для анкоринга/ротации ---
+      - PLATFORM_ADMIN_API_KEY=${PLATFORM_ADMIN_API_KEY:?PLATFORM_ADMIN_API_KEY is required}
       # --- БД: PostgreSQL вместо dev-SQLite ---
       - DATABASE_URL=postgresql+psycopg2://siauser:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}@postgres:5432/sia_sentinel
-      # --- Runtime-данные на постоянном томе ---
+      # --- Runtime-данные: bind mount ./data (виден на хосте для синка анкоров) ---
       - API_KEYS_FILE=/app/data/api_keys.json
       - TENANTS_FILE=/app/data/tenants.json
       - USAGE_EVENTS_FILE=/app/data/usage_events.jsonl
@@ -35,24 +46,25 @@ services:
       - RECEIPTS_DIR=/app/data/receipts
       - WEBHOOKS_FILE=/app/data/webhooks.json
       - EVIDENCE_DIR=/app/data/evidence
-      # Анкоры на томе: синкай /app/data/anchors наружу (S3 WORM/git remote)
+      # Анкоры рядом с остальным состоянием: синкайте ./data/anchors наружу
+      # (S3 Object Lock / WORM-бакет / публичный git remote)
       - ANCHORS_DIR=/app/data/anchors
       # --- Внешняя поверхность ---
-      # Домен обязателен: без него портал верификации и бейджи с твоего же
-      # домена не работают (дефолт в cors.py — только localhost)
-      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:?CORS_ALLOW_ORIGINS is required, e.g. https://sentinel.yourdomain.com}
-      # Ставь 1 ТОЛЬКО за обратным прокси: иначе rate limit подделывается
-      # заголовком X-Forwarded-For (fail-closed дефолт правильный)
-      - TRUST_PROXY=${TRUST_PROXY:-}
-      # HTTP-транспорт анкоринга (POST подписанного чекпоинта во внешнее
-      # WORM-хранилище); файловый транспорт работает и без него
+      - CORS_ALLOW_ORIGINS=${CORS_ALLOW_ORIGINS:-https://${DOMAIN:?DOMAIN is required}}
+      # Sentinel всегда за Caddy в этом стеке, поэтому доверяем X-Forwarded-For
+      - TRUST_PROXY=1
+      # HTTP-транспорт анкоринга: ТОЛЬКО неаутентифицированный ingest
+      # (заголовков авторизации не шлёт; для S3 — файловый транспорт + aws s3 sync)
       - ANCHOR_URL=${ANCHOR_URL:-}
       # --- Опционально ---
       - NVIDIA_API_KEY=${NVIDIA_API_KEY:-}
       - ENABLE_DEMO_LOGIN=${ENABLE_DEMO_LOGIN:-}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
     volumes:
-      - sentinel_data:/app/data
+      # Named volume НЕ годится: анкоры и данные должны быть видны на хосте
+      # для внешнего синка (блокер 2 мини-аудита). Пути ниже — от каталога
+      # с compose-файлом.
+      - ./data:/app/data
       - ./logs:/app/logs
     restart: unless-stopped
     depends_on:
@@ -64,6 +76,22 @@ services:
       timeout: 10s
       retries: 3
       start_period: 15s
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - DOMAIN=${DOMAIN:?DOMAIN is required}
+      - ACME_EMAIL=${ACME_EMAIL:-}
+    volumes:
+      - ./docker/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    restart: unless-stopped
+    depends_on:
+      - sentinel
 
   postgres:
     image: postgres:16-alpine
@@ -81,5 +109,6 @@ services:
       retries: 5
 
 volumes:
-  sentinel_data:
+  caddy_data:
+  caddy_config:
   postgres_data:

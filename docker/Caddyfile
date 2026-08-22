@@ -1,0 +1,13 @@
+# Caddy перед Sentinel: автоматический TLS (Let's Encrypt / ACME).
+#
+# {$DOMAIN} и {$ACME_EMAIL} приходят из docker-compose.prod.yml.
+# При ACME_EMAIL Caddy использует HTTP-01 challenge; без email —
+# тот же флоу с email по умолчанию для уведомлений об истечении.
+
+{$DOMAIN} {
+	encode gzip
+
+	# API, портал верификации, бейджи — всё через один сервис.
+	# Caddy сам ставит X-Forwarded-For (поэтому TRUST_PROXY=1 в compose).
+	reverse_proxy sentinel:8000
+}
