@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import os
 import secrets
 import time
 from dataclasses import dataclass, asdict
@@ -15,6 +14,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PublicKey,
 )
 from cryptography.exceptions import InvalidSignature
+
+from sia.config import resolve_env
 
 
 @dataclass
@@ -119,21 +120,43 @@ class ReceiptGenerator:
     corresponding public key, so any third party can verify receipts
     without ever holding the signing secret. The seed material can be
     provided explicitly or via the RECEIPT_SIGNING_KEY environment
-    variable; without either, an ephemeral key is generated.
+    variable (or .env — resolved like every other project secret).
     In production, this would be replaced with zk-SNARKs/zk-STARKs.
     """
 
-    def __init__(self, signing_key: Optional[str] = None):
+    def __init__(
+        self,
+        signing_key: Optional[str] = None,
+        allow_ephemeral: bool = False,
+    ):
         """
         Initialize receipt generator.
 
         Args:
             signing_key: Seed material for the Ed25519 signing key.
-                         Falls back to RECEIPT_SIGNING_KEY, then to an
-                         ephemeral random key.
+                         Falls back to RECEIPT_SIGNING_KEY (env, then .env).
+            allow_ephemeral: Разрешить эфемерный ключ, когда материал не
+                         задан нигде. По умолчанию ЗАПРЕЩЁН: квитанции,
+                         подписанные эфемерным ключом, невозможно привязать
+                         к SIA после рестарта — это молча необратимая
+                         потеря. Явное разрешение оставлено только dev-старту
+                         API, который сам печатает громкое предупреждение.
+
+        Raises:
+            ValueError: если материал не задан и allow_ephemeral=False.
         """
         if signing_key is None:
-            signing_key = os.getenv("RECEIPT_SIGNING_KEY") or secrets.token_hex(32)
+            signing_key = resolve_env("RECEIPT_SIGNING_KEY")
+
+        if signing_key is None:
+            if not allow_ephemeral:
+                raise ValueError(
+                    "RECEIPT_SIGNING_KEY is not set (env or .env). Receipts "
+                    "signed with an ephemeral key cannot be verified after a "
+                    "restart. Set RECEIPT_SIGNING_KEY, or pass an explicit "
+                    "signing_key, or opt into allow_ephemeral=True explicitly."
+                )
+            signing_key = secrets.token_hex(32)
 
         self._private_key = _derive_private_key(signing_key)
 

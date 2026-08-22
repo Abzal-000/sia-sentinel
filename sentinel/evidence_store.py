@@ -8,6 +8,8 @@ import secrets
 from pathlib import Path
 from typing import Any, Optional
 
+from sia.config import resolve_env
+
 
 class EvidenceStore:
     """
@@ -26,8 +28,9 @@ class EvidenceStore:
         self.evidence_dir = Path(evidence_dir or os.getenv("EVIDENCE_DIR") or "evidence")
         self.evidence_dir.mkdir(parents=True, exist_ok=True)
 
-        # Use environment variable or provided key
-        resolved_key = signing_key or os.getenv("EVIDENCE_SIGNING_KEY")
+        # Use environment/.env variable or provided key (resolve_env, как
+        # у всех секретов проекта — сырой getenv молча игнорировал .env)
+        resolved_key = signing_key or resolve_env("EVIDENCE_SIGNING_KEY")
 
         if not resolved_key:
             # Эфемерный ключ: подписи не переживут рестарт.

@@ -234,7 +234,17 @@ def sign_report(report: dict[str, Any]) -> dict[str, Any]:
     else:
         claim = report.get("claim", {})
 
-    generator = ReceiptGenerator()
+    try:
+        generator = ReceiptGenerator()
+    except ValueError as exc:
+        # Раньше здесь молча рождался эфемерный ключ: чек нельзя было
+        # привязать к SIA и проверить после выхода из процесса
+        raise SystemExit(
+            f"Cannot sign: {exc}\n"
+            "Hint: export RECEIPT_SIGNING_KEY (or add it to .env) before "
+            "using --sign."
+        ) from exc
+
     receipt = generator.generate_receipt(
         evidence_id=f"pos-{report.get('name', 'flow')}",
         code=json.dumps(report, sort_keys=True, default=str),

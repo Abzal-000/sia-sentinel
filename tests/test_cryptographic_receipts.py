@@ -264,5 +264,46 @@ class CryptographicReceiptsTestCase(unittest.TestCase):
             ReceiptVerifier(base64.b64encode(b"0123456789abcdef").decode())
 
 
+class GeneratorKeyResolutionTestCase(unittest.TestCase):
+    """Блокер маяка: секрет читается через resolve_env, эфемерный — только явно."""
+
+    def test_bare_generator_without_secret_raises(self) -> None:
+        # Раньше молча генерировался эфемерный ключ: чек подписывался
+        # личностью, исчезающей с рестартом, без единого сообщения
+        from unittest.mock import patch
+
+        with patch("sentinel.cryptographic_receipts.resolve_env", return_value=None):
+            with self.assertRaises(ValueError) as ctx:
+                ReceiptGenerator()
+
+        self.assertIn("RECEIPT_SIGNING_KEY", str(ctx.exception))
+        self.assertIn("ephemeral", str(ctx.exception))
+
+    def test_explicit_allow_ephemeral_works(self) -> None:
+        from unittest.mock import patch
+
+        with patch("sentinel.cryptographic_receipts.resolve_env", return_value=None):
+            generator = ReceiptGenerator(allow_ephemeral=True)
+
+        self.assertTrue(generator.kid)  # ключ создан
+
+    def test_resolves_secret_via_resolve_env(self) -> None:
+        # .env-резолв: секрет, заданный только в .env (не в окружении),
+        # раньше молча игнорировался сырым os.getenv
+        from unittest.mock import patch
+
+        with patch(
+            "sentinel.cryptographic_receipts.resolve_env",
+            return_value="env-or-dotenv-material",
+        ) as mocked:
+            resolved = ReceiptGenerator()
+
+        mocked.assert_called_once_with("RECEIPT_SIGNING_KEY")
+        self.assertEqual(
+            resolved.kid,
+            ReceiptGenerator("env-or-dotenv-material").kid,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -92,17 +92,23 @@ class AuditCLITestCase(unittest.TestCase):
             main(["--flow", str(self.tmp / "missing.json")])
 
     def test_signed_receipt_verifies(self) -> None:
+        import os
+        from unittest.mock import patch
+
         from sentinel.cryptographic_receipts import CryptographicReceipt, ReceiptVerifier
 
         flow_path = self._write_flow(LLM_FLOW)
         out_path = self.tmp / "report.json"
         receipt_path = self.tmp / "receipt.json"
 
-        exit_code = main([
-            "--flow", flow_path,
-            "--out", str(out_path),
-            "--sign", str(receipt_path),
-        ])
+        # Подпись требует стабильный ключ (эфемерный запрещён) — задаём
+        # через окружение, как это делал бы оператор
+        with patch.dict(os.environ, {"RECEIPT_SIGNING_KEY": "cli-test-signing-key"}):
+            exit_code = main([
+                "--flow", flow_path,
+                "--out", str(out_path),
+                "--sign", str(receipt_path),
+            ])
 
         self.assertEqual(exit_code, 0)
 
@@ -115,6 +121,33 @@ class AuditCLITestCase(unittest.TestCase):
 
         receipt["manifest"]["dataset_sha256"] = "tampered"
         self.assertFalse(verifier.verify(CryptographicReceipt(**receipt)))
+
+    def test_sign_without_key_refuses_loudly(self) -> None:
+        """Без RECEIPT_SIGNING_KEY подпись запрещена — с чистой ошибкой, не эфемерным ключом."""
+        import os
+        from unittest.mock import patch
+
+        # Детерминированно: ни окружение, ни .env не содержат секрета
+        env = {k: v for k, v in os.environ.items() if k != "RECEIPT_SIGNING_KEY"}
+
+        with patch.dict(os.environ, env, clear=True), patch(
+            "sentinel.cryptographic_receipts.resolve_env", return_value=None
+        ):
+            flow_path = self._write_flow(LLM_FLOW)
+            out_path = self.tmp / "report.json"
+            receipt_path = self.tmp / "receipt.json"
+
+            with self.assertRaises(SystemExit) as ctx:
+                main([
+                    "--flow", flow_path,
+                    "--out", str(out_path),
+                    "--sign", str(receipt_path),
+                ])
+
+        message = str(ctx.exception)
+        self.assertIn("Cannot sign", message)
+        self.assertIn("RECEIPT_SIGNING_KEY", message)
+        self.assertFalse(receipt_path.exists())  # чек не создан
 
     def test_markdown_generator_standalone(self) -> None:
         report = json.loads(json.dumps({

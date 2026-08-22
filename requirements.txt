@@ -20,8 +20,13 @@ fastapi==0.141.1
 greenlet==3.5.5
 h11==0.16.0
 httpcore==1.0.9
+httpcore2==2.10.0
 httptools==0.8.0
 httpx==0.28.1
+# httpx2 — жёсткая зависимость openai>=3 (и рекомендуемая starlette);
+# без него живые LLM-вызовы падают на import. В docker-requirements был,
+# здесь отсутствовал — свежий локальный venv не умел делать live-аудиты.
+httpx2==2.10.0
 idna==3.18
 itsdangerous==2.2.0
 Jinja2==3.1.6

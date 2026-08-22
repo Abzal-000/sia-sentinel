@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from pydantic import BaseModel as PydanticBaseModel
 
 from sia.constitutional_ai_layer import ConstitutionalAILayer
+from sia.config import resolve_env
 from sia.flow_runner import (
     build_preregistration_commitment,
     run_flow_audit,
@@ -55,9 +56,10 @@ from sentinel.auth import (
     require_role,
 )
 # Initialize receipt generator (Ed25519 signing) and public verifier.
-# Без RECEIPT_SIGNING_KEY ключ генерируется случайно и эфемерно:
-# квитанции не переживут рестарт. В продакшене ключ обязателен.
-RECEIPT_SIGNING_KEY = os.getenv("RECEIPT_SIGNING_KEY")
+# Через resolve_env: секрет может лежать и в .env, а не только в окружении.
+# Без ключа — эфемерный + громкое предупреждение (только dev; прод требует
+# RECEIPT_SIGNING_KEY, иначе квитанции не переживут рестарт).
+RECEIPT_SIGNING_KEY = resolve_env("RECEIPT_SIGNING_KEY")
 
 if not RECEIPT_SIGNING_KEY:
     import secrets as _secrets
@@ -68,7 +70,7 @@ if not RECEIPT_SIGNING_KEY:
         "receipts will not survive restarts. Set RECEIPT_SIGNING_KEY in production."
     )
 
-receipt_generator = ReceiptGenerator(RECEIPT_SIGNING_KEY)
+receipt_generator = ReceiptGenerator(RECEIPT_SIGNING_KEY, allow_ephemeral=True)
 app = FastAPI(
     title="SIA Sentinel",
     description=(

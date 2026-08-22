@@ -24,12 +24,13 @@ ledger) и RECEIPT_SIGNING_KEY (ключ подписи чекпоинтов; б
 """
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
 # Запуск из любого места: добавляем корень проекта в sys.path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sia.config import resolve_env  # noqa: E402
 
 from sentinel.anchoring import publish_checkpoint  # noqa: E402
 from sentinel.cryptographic_receipts import ReceiptGenerator  # noqa: E402
@@ -38,14 +39,13 @@ from sentinel.receipt_registry import ReceiptRegistry  # noqa: E402
 
 def main() -> int:
     # Худший класс отказа — молча подписать эфемерным ключом: ReceiptGenerator
-    # без RECEIPT_SIGNING_KEY генерирует случайный, чекпоинты уходят
-    # подписанными ключом, которого нет ни в одной декларации, и любой
-    # верификатор их отвергнет. Отказываемся громко и сразу.
-    if not os.getenv("RECEIPT_SIGNING_KEY"):
+    # без RECEIPT_SIGNING_KEY откажется работать, но проверяем громко и до
+    # всего остального. resolve_env читает и окружение, и .env.
+    if not resolve_env("RECEIPT_SIGNING_KEY"):
         print(
-            "FATAL: RECEIPT_SIGNING_KEY is not set — refusing to sign a "
-            "checkpoint with an ephemeral key (every verifier would reject "
-            "it, and the failure would be silent).",
+            "FATAL: RECEIPT_SIGNING_KEY is not set (env or .env) — refusing to "
+            "sign a checkpoint with an ephemeral key (every verifier would "
+            "reject it, and the failure would be silent).",
             file=sys.stderr,
         )
         return 3

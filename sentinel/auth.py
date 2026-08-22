@@ -27,9 +27,12 @@ import jwt
 from fastapi import Depends, HTTPException, Security, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer, APIKeyHeader
 
+from sia.config import resolve_env
+
 # === Configuration ===
 
-_env_jwt_secret = os.getenv("JWT_SECRET_KEY")
+# Через resolve_env: секрет может лежать и в .env, а не только в окружении.
+_env_jwt_secret = resolve_env("JWT_SECRET_KEY")
 
 if _env_jwt_secret:
     JWT_SECRET_KEY = _env_jwt_secret
