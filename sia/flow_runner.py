@@ -326,6 +326,8 @@ def _endpoint_from_block(block: dict[str, Any]) -> LLMEndpointConfig:
         seed=block.get("seed", 42),
         prices_as_of=block.get("prices_as_of"),
         catalog_version=block.get("catalog_version"),
+        price_source_url=block.get("price_source_url"),
+        priced_model_name=block.get("priced_model_name"),
     )
 
 

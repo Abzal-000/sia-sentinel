@@ -202,6 +202,50 @@ class LLMFlowAuditorTestCase(unittest.TestCase):
         )
 
 
+class AnchoredMetricTestCase(unittest.TestCase):
+    """Метрика маяка expect_contains/digit-anchored: ANSWER= — последней строкой."""
+
+    def setUp(self) -> None:
+        self.auditor = LLMFlowAuditor(
+            client_factory=lambda config: SimulatedLLMClient(config)
+        )
+        self.cost_model = CostModel(PricingConfig())
+        self.dataset = [
+            {"prompt": f"Compute {i}+{i}?", "expect_contains": f"ANSWER={2 * i}"}
+            for i in range(1, 7)
+        ]
+        self.config = LLMEndpointConfig(model_name="m", profile="verbose", seed=3)
+
+    def test_answer_mid_text_does_not_pass(self) -> None:
+        from sia.llm_flow import _expect_met
+
+        # Упоминание ANSWER= в рассуждениях посреди текста не засчитывается
+        self.assertFalse(_expect_met(
+            "ANSWER=480", "Hmm, let me think... not ANSWER=480 yet.\nStill thinking"
+        ))
+        # Последняя непустая строка, равная ожиданию, — засчитывается
+        self.assertTrue(_expect_met("ANSWER=480", "reasoning...\nANSWER=480"))
+        # Обычная подстрока работает как раньше; без чекера — проход
+        self.assertTrue(_expect_met("Paris", "The capital is Paris"))
+        self.assertTrue(_expect_met(None, "anything"))
+
+    def test_simulated_client_anchors_correct_answers(self) -> None:
+        from sia.llm_flow import _expect_met
+
+        client = SimulatedLLMClient(
+            LLMEndpointConfig(model_name="m", seed=5, simulated_reliability=1.0)
+        )
+        result = client.complete("Compute 240+240?", expect="ANSWER=480")
+        self.assertTrue(_expect_met("ANSWER=480", result.text))
+
+    def test_preregistration_declares_anchored_metric(self) -> None:
+        commitment = LLMFlowAuditor.preregistration_commitment(
+            self.dataset, self.config, self.config,
+            delta=0.05, confidence=0.95, repetitions=1,
+        )
+        self.assertEqual(commitment["metric"], "expect_contains/digit-anchored")
+
+
 class LiveClientRetryTestCase(unittest.TestCase):
     """Пункт 1 плана маяка: backoff-повторы SDK вместо глобального троттла.
 

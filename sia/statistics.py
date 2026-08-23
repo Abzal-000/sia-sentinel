@@ -65,7 +65,14 @@ def newcombe_paired_ci(
     n: int,
     confidence: float = 0.95,
 ) -> tuple[float, float]:
-    """Интервал Ньюкомба (hybrid score) для разности парных долей.
+    """Интервал для разности парных долей: MOVER на дискордантных клетках.
+
+    ВАЖНО (честное имя): это НЕ метод Newcombe (2006). У Ньюкомба
+    Wilson-интервалы строятся на маргинальных долях с поправкой на
+    корреляцию ψ; здесь — на дискордантных клетках p_10/p_01 без такой
+    поправки, то есть MOVER-комбинация двух Wilson-интервалов. Реализованный
+    канонический вариант Ньюкомба калибровался хуже на наших n, поэтому
+    конструкция оставлена, ссылка исправлена.
 
     Args:
         b: число дискордантных пар «старое прошло, новое упало» (old=1, new=0).
@@ -76,8 +83,8 @@ def newcombe_paired_ci(
     Returns:
         (lower, upper) для разности ``p_new - p_old``.
 
-    Разность ``p_new - p_old = p_01 - p_10 = (c - b) / n``. Интервал строится
-    через комбинацию интервалов Вильсона для ``p_10`` и ``p_01`` (Newcombe 2006).
+    Разность ``p_new - p_old = p_01 - p_10 = (c - b) / n``. Интервал —
+    квадратичная комбинация Wilson-границ p_10 и p_01.
     """
     if n <= 0:
         return -1.0, 1.0
@@ -89,8 +96,11 @@ def newcombe_paired_ci(
     l10, u10 = wilson_ci(b, n, confidence)
     l01, u01 = wilson_ci(c, n, confidence)
 
-    lower = diff - math.sqrt((p10 - l10) ** 2 + (u01 - p01) ** 2)
-    upper = diff + math.sqrt((u10 - p10) ** 2 + (p01 - l01) ** 2)
+    # Нижняя граница собирается из НИЖНИХ компонентов (p01 - l01 и
+    # u10 - p10), верхняя — из ВЕРХНИХ (u01 - p01 и p10 - l10). Раньше
+    # в нижней стояли компоненты верхней — интервал был смещён вверх.
+    lower = diff - math.sqrt((p01 - l01) ** 2 + (u10 - p10) ** 2)
+    upper = diff + math.sqrt((u01 - p01) ** 2 + (p10 - l10) ** 2)
 
     return max(-1.0, lower), min(1.0, upper)
 
@@ -145,7 +155,17 @@ class NonInferiorityResult:
     def verdict(self) -> str:
         if self.n_pairs == 0:
             return "inconclusive"
-        return "non_inferior" if self.non_inferior else "inferior"
+
+        if self.non_inferior:
+            return "non_inferior"
+
+        # CI ниже -delta — доказанно хуже. Если же CI ПРОШЁЛ, а вердикт
+        # не выдан, отказали ворота MDD: данных недостаточно, и «inferior»
+        # было бы таким же превышением заявления, как и ложный PASS
+        if self.ci_lower > -self.delta:
+            return "inconclusive"
+
+        return "inferior"
 
     def to_dict(self) -> dict:
         return {
@@ -239,8 +259,20 @@ def non_inferiority_test(
         p_discordant=max(p_discordant_assumption, observed_discordant),
     )
 
-    # Неинфериорность: нижняя граница CI для (p_new - p_old) > -delta
-    non_inferior = n > 0 and ci_lower > -delta
+    # Неинфериорность: нижняя граница CI для (p_new - p_old) > -delta,
+    # ЗАПЕРТАЯ ПО MDD: если минимально детектируемая разница больше
+    # объявленного маркера, прогон статистически не мог бы заметить
+    # падение на delta, и «CI прошёл» — артефакт малой выборки, а не
+    # доказательство. Исключение — полная нулевая дискордантность
+    # (b = c = 0): наблюдённая разность точно 0, ухудшение не видно ни
+    # в одной паре; честность такого заявления обеспечивает публикуемый
+    # MDD рядом. Цена решения: аудитор отказывает чаще. Продукт — это
+    # достоверная квитанция, а не PASS.
+    non_inferior = (
+        n > 0
+        and ci_lower > -delta
+        and (mdd <= delta or (b == 0 and c == 0))
+    )
 
     return NonInferiorityResult(
         non_inferior=non_inferior,

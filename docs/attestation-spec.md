@@ -41,14 +41,14 @@ configuration. The verdict methodology is published in the attestation:
 
 | Field | Type | Description |
 |---|---|---|
-| `non_inferior` | bool | Non-inferiority verdict: Newcombe CI lower bound for `p_new − p_old` > `−delta`. |
+| `non_inferior` | bool | Non-inferiority verdict: CI lower bound for `p_new − p_old` > `−delta` **and** MDD ≤ delta (the run could statistically have detected a delta-sized drop; zero discordance `b = c = 0` is exempt — the observed difference is exactly 0 and the published MDD carries the honesty). A verdict the gate blocks is reported as `inconclusive`, not `inferior`. |
 | `delta` | number | Pre-declared non-inferiority margin (0 = no quality drop tolerated; default for deterministic code suites). |
 | `mcnemar_p` | number | Exact McNemar two-sided p-value on discordant pairs. |
 | `minimum_detectable_difference` | number | MDD at n pairs, α = 1−confidence, 80% power: the smallest quality drop this audit could have noticed. Computed from `max(assumed, observed)` discordance — the observed rate `((b+c)/n)` is a floor-raiser, so the published MDD can never understate this run's blindness when discordance exceeds the 10% planning assumption. |
 | `n_pairs` | integer | Number of paired observations. |
 | `b_old_pass_new_fail` | integer | Discordant pairs where old passed and new failed. |
 | `c_old_fail_new_pass` | integer | Discordant pairs where old failed and new passed. |
-| `ci_lower`, `ci_upper` | number | Newcombe hybrid score interval for `p_new − p_old`. |
+| `ci_lower`, `ci_upper` | number | MOVER-style interval for `p_new − p_old`: quadratic combination of Wilson bounds on the discordant cells (no correlation correction; not Newcombe 2006, whose ψ-adjusted marginal construction calibrated worse on our n). |
 
 `savings_verified` requires quality preservation — `non_inferior = true`, or
 zero discordance (`b = c = 0`, observed quality identical; the claim remains
@@ -66,7 +66,7 @@ against:
 |---|---|---|
 | `dataset_sha256` | string | SHA-256 of the dataset (`prompt\|expect_contains` lines). |
 | `delta` | number | The non-inferiority margin declared pre-run. |
-| `metric` | string | Quality metric, currently `"expect_contains"`. |
+| `metric` | string | Quality metric. `"expect_contains"`: expected substring anywhere in the response. `"expect_contains/digit-anchored"` (beacon): the expected `ANSWER=<n>` string must be the LAST non-empty line of the response — mentioning it mid-reasoning does not count. |
 
 The ledger entry ordering (preregistration `seq` < receipt `seq`) and the
 commitment match are checkable via

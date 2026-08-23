@@ -183,6 +183,11 @@ def _endpoint_block(
         # может быть устаревшим, а именно эта дата попадёт в обязательство.
         "prices_as_of": prices_as_of,
         "catalog_version": catalog_version,
+        # Провенанс цены: какой платный идентификатор OpenRouter дал число
+        # и откуда список. Запись №1 неизменяема — без этих полей проверяющий
+        # видит модель NVIDIA по ценам, которых NVIDIA не публикует.
+        "priced_model_name": entry.get("priced_as"),
+        "price_source_url": entry.get("_source"),
     }
 
 

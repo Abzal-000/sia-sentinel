@@ -95,7 +95,7 @@ class PreregistrationAPITestCase(unittest.TestCase):
         commitment = data["commitment"]
         self.assertEqual(commitment["protocol"], "sia-preregistration/1")
         self.assertEqual(commitment["delta"], 0.10)
-        self.assertEqual(commitment["metric"], "expect_contains")
+        self.assertEqual(commitment["metric"], "expect_contains/digit-anchored")
         self.assertEqual(commitment["dataset_size"], 2)
         self.assertIn("dataset_sha256", commitment)
 

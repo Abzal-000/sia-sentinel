@@ -190,6 +190,11 @@ class LLMEndpointConfig:
     # заявленную экономию можно было перепроверить против цен того дня.
     prices_as_of: Optional[str] = None
     catalog_version: Optional[str] = None
+    # Провенанс цены (маяк): откуда взяты числа и какой идентификатор дал
+    # цену. Без них проверяющий видит модель NVIDIA по ценам, которых
+    # NVIDIA не публикует, и делает вывод, что аудитор ошибся.
+    price_source_url: Optional[str] = None
+    priced_model_name: Optional[str] = None
 
     def resolve_pricing(self, defaults: PricingConfig) -> PricingConfig:
         return PricingConfig(
@@ -219,7 +224,29 @@ class LLMEndpointConfig:
             "simulated_reliability": self.simulated_reliability,
             "prices_as_of": self.prices_as_of,
             "catalog_version": self.catalog_version,
+            "price_source_url": self.price_source_url,
+            "priced_model_name": self.priced_model_name,
         }
+
+
+def _expect_met(expect: Optional[str], text: str) -> bool:
+    """Проверка чекера по метрике ожидания.
+
+    Общий случай (expect_contains): подстрока где угодно в ответе.
+
+    Якорный случай (expect начинается с ``ANSWER=``; метрика маяка
+    ``expect_contains/digit-anchored``): ПОСЛЕДНЯЯ непустая строка ответа
+    обязана быть ровно ожиданием. Модель должна ЗАВЕРШИТЬ ответом —
+    упоминание числа в рассуждениях посреди текста засчитано не будет.
+    """
+    if expect is None:
+        return True
+
+    if expect.startswith("ANSWER="):
+        lines = [line.strip() for line in text.strip().splitlines() if line.strip()]
+        return bool(lines) and lines[-1] == expect.strip()
+
+    return expect in text
 
 
 class SimulatedLLMClient:
@@ -294,7 +321,11 @@ class SimulatedLLMClient:
         if expect is not None:
             if rng.random() < self._reliability(profile):
                 filler = hashlib.sha256(f"{seed_material}:filler".encode()).hexdigest()
-                text = f"[{self.config.model_name}] {expect} {filler}"
+                if expect.startswith("ANSWER="):
+                    # Якорная метрика: правильный ответ — ПОСЛЕДНЕЙ строкой
+                    text = f"[{self.config.model_name}] {filler}\n{expect}"
+                else:
+                    text = f"[{self.config.model_name}] {expect} {filler}"
             else:
                 text = self._distractor(expect, seed_material)
         else:
@@ -498,7 +529,9 @@ class LLMFlowAuditor:
             "protocol": LLMFlowAuditor.PREREGISTRATION_PROTOCOL,
             "dataset_sha256": LLMFlowAuditor._dataset_hash(dataset),
             "dataset_size": len(dataset),
-            "metric": "expect_contains",
+            # digit-anchored: чекер якорит ожидание к концу строки ответа
+            # (ANSWER=...), а не «строка где угодно»
+            "metric": "expect_contains/digit-anchored",
             "delta": delta,
             "confidence": confidence,
             "repetitions": max(1, int(repetitions)),
@@ -569,7 +602,7 @@ class LLMFlowAuditor:
                         result.input_tokens, result.output_tokens
                     )
                     total_usd += usd
-                    ok = expect is None or expect in result.text
+                    ok = _expect_met(expect, result.text)
 
                     if journal is not None:
                         journal.record(

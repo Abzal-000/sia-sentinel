@@ -143,6 +143,76 @@ class NonInferiorityTestCase(unittest.TestCase):
         )
         self.assertAlmostEqual(result.mdd, expected, places=10)
 
+    def test_interval_golden_values_post_fix(self) -> None:
+        """Золотые числа исправленной MOVER-конструкции (п.7 рецензии).
+
+        Прежняя реализация собирала НИЖНЮЮ границу из компонентов верхней
+        ((p10-l10) и (u01-p01)) — интервал был смещён вверх, а все тесты
+        были направленными («lower < 0») и этого не видели. Привязка к
+        числам делает повторение такой правки незамеченной невозможным.
+        """
+        cases = {
+            (2, 3, 90): (-0.04830806639460024, 0.07337017530108143),
+            (0, 0, 50): (-0.07134759913335872, 0.07134759913335872),
+            (10, 2, 200): (-0.08023730580352734, -0.005748667970363226),
+        }
+
+        for (b, c, n), expected in cases.items():
+            lower, upper = newcombe_paired_ci(b, c, n)
+
+            self.assertAlmostEqual(lower, expected[0], places=12, msg=f"b={b} c={c} n={n}")
+            self.assertAlmostEqual(upper, expected[1], places=12, msg=f"b={b} c={c} n={n}")
+
+    def test_verdict_gated_by_mdd_when_ci_passes(self) -> None:
+        """Случай рецензента: CI проходит на малом n, но MDD >> delta.
+
+        Интервал в одиночку малое n не отсекает (мощность 30-51% при
+        n=90); вердикт обязан запираться по MDD. И это «inconclusive»,
+        а не «inferior»: хуже не доказано — недостаточно данных.
+        """
+        old = [True] * 88 + [False] * 2   # старое упало дважды
+        new = [True] * 90                 # новое не упало ни разу
+
+        result = non_inferiority_test(old, new, delta=0.05)
+
+        # CI проходит: -0.0218 > -0.05
+        self.assertGreater(result.ci_lower, -result.delta)
+        self.assertFalse(result.non_inferior)      # но MDD = 0.0829 > 0.05
+        self.assertEqual(result.verdict, "inconclusive")
+
+    def test_zero_discordance_exempt_from_mdd_gate(self) -> None:
+        # b=c=0: наблюдённая разность точно 0; ворота MDD обходятся,
+        # честность обеспечивает публикуемый MDD рядом
+        old = [True] * 400
+        new = [True] * 400
+
+        result = non_inferiority_test(old, new, delta=0.02)
+
+        self.assertGreater(result.ci_lower, -result.delta)
+        self.assertGreater(result.mdd, result.delta)
+        self.assertTrue(result.non_inferior)
+        self.assertEqual(result.verdict, "non_inferior")
+
+    def test_single_discordant_pair_blocks_at_same_n(self) -> None:
+        # Одна дискордантная пара снимает исключение: при MDD > delta
+        # заявление «не хуже чем на delta» не подтверждено
+        old = [True] * 400
+        new = [True] * 399 + [False]
+
+        result = non_inferiority_test(old, new, delta=0.02)
+
+        self.assertFalse(result.non_inferior)
+        self.assertEqual(result.verdict, "inconclusive")
+
+    def test_true_inferior_still_inferior(self) -> None:
+        old = [True] * 50
+        new = [True] * 35 + [False] * 15
+
+        result = non_inferiority_test(old, new, delta=0.10)
+
+        self.assertFalse(result.non_inferior)
+        self.assertEqual(result.verdict, "inferior")  # ci_lower ниже маркера
+
     def test_mismatched_lengths_raises(self) -> None:
         with self.assertRaises(ValueError):
             non_inferiority_test([True], [True, False], delta=0.1)

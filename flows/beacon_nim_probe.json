@@ -1,6 +1,6 @@
 {
   "kind": "llm_flow",
-  "name": "beacon-probe90-llama-3.3-70b-vs-llama-3.1-8b",
+  "name": "beacon-probe90-llama-3.1-70b-vs-llama-3.3-70b",
   "_provenance": {
     "source": "GSM8K test split (grade-school-math, MIT)",
     "source_url": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl",
@@ -466,6 +466,16 @@
     }
   ],
   "old": {
+    "model_name": "meta/llama-3.1-70b-instruct",
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "api_key_env": "NVIDIA_API_KEY",
+    "input_token_usd_per_m": 0.4,
+    "output_token_usd_per_m": 0.4,
+    "temperature": 0.0,
+    "prices_as_of": "2026-08-22",
+    "catalog_version": "nim-or-2026-08-22-r3"
+  },
+  "new": {
     "model_name": "meta/llama-3.3-70b-instruct",
     "base_url": "https://integrate.api.nvidia.com/v1",
     "api_key_env": "NVIDIA_API_KEY",
@@ -473,16 +483,6 @@
     "output_token_usd_per_m": 0.32,
     "temperature": 0.0,
     "prices_as_of": "2026-08-22",
-    "catalog_version": "nim-or-2026-08-22"
-  },
-  "new": {
-    "model_name": "meta/llama-3.1-8b-instruct",
-    "base_url": "https://integrate.api.nvidia.com/v1",
-    "api_key_env": "NVIDIA_API_KEY",
-    "input_token_usd_per_m": 0.05,
-    "output_token_usd_per_m": 0.08,
-    "temperature": 0.0,
-    "prices_as_of": "2026-08-22",
-    "catalog_version": "nim-or-2026-08-22"
+    "catalog_version": "nim-or-2026-08-22-r3"
   }
 }
