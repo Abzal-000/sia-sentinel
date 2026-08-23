@@ -20,7 +20,7 @@ from .audit import ProofOfSavingsAuditor
 from .config import resolve_env
 from .cost_model import PricingConfig
 from .evaluation_engine import EvaluationEngine
-from .llm_flow import LLMEndpointConfig, LLMFlowAuditor
+from .llm_flow import DEFAULT_REPLAY_TOLERANCE, LLMEndpointConfig, LLMFlowAuditor
 from .model_catalog import ModelCatalog, ModelSpec
 from .optimizer import OptimizationGoal, SavingsOptimizer
 
@@ -206,6 +206,26 @@ def _audit_code_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return report_dict
 
 
+
+def _replay_tolerance_from_flow(flow: dict[str, Any]) -> float:
+    """Допуск реплея из флоу; без ключа — измеренный дефолт 0.05."""
+    value = flow.get("replay_tolerance", DEFAULT_REPLAY_TOLERANCE)
+
+    try:
+        tolerance = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"replay_tolerance must be a number in (0, 1), got {value!r}"
+        ) from exc
+
+    if not 0.0 < tolerance < 1.0:
+        raise ValueError(
+            f"replay_tolerance must be in (0, 1), got {tolerance}"
+        )
+
+    return tolerance
+
+
 def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
     """Строит обязательство предрегистрации из flow-декларации БЕЗ запуска аудита.
 
@@ -246,6 +266,7 @@ def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
         delta=delta,
         confidence=confidence,
         repetitions=repetitions,
+        replay_tolerance=_replay_tolerance_from_flow(flow),
     )
 
 
@@ -304,6 +325,7 @@ def _audit_llm_flow(
         delta=delta,
         confidence=confidence,
         repetitions=repetitions,
+        replay_tolerance=_replay_tolerance_from_flow(flow),
     )
     return report_dict
 

@@ -67,6 +67,8 @@ against:
 | `dataset_sha256` | string | SHA-256 of the dataset (`prompt\|expect_contains` lines). |
 | `delta` | number | The non-inferiority margin declared pre-run. |
 | `metric` | string | Quality metric. `"expect_contains"`: expected substring anywhere in the response. `"expect_contains/digit-anchored"` (beacon): the expected `ANSWER=<n>` string must be the LAST non-empty line of the response — mentioning it mid-reasoning does not count. |
+| `repetitions` | integer | Trials per dataset item (R); an item passes only if all R trials pass. |
+| `replay_tolerance` | number | Pre-declared share of items an independent re-player may see answered differently (0–1). The served endpoint is not deterministic over time even at temperature 0 — measured element drift 1–4 of 90 per model between identical runs. Without this pre-registered disclosure an honest verifier looks like a forger, and real forgery hides inside the tolerance. Default 0.05. |
 
 The ledger entry ordering (preregistration `seq` < receipt `seq`) and the
 commitment match are checkable via

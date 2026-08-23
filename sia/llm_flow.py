@@ -31,6 +31,13 @@ from .statistics import non_inferiority_test
 from .models import EquivalenceReport
 
 
+# Допуск реплея по умолчанию: доля элементов, которой независимый повторитель
+# разрешает отличаться от записанных ответов. Основание — измерение
+# воспроизводимости 2026-08-23 (см. preregistration_commitment). Переопределяется
+# ключом flow "replay_tolerance"; значение попадает в обязательство до прогона.
+DEFAULT_REPLAY_TOLERANCE = 0.05
+
+
 class _CheckpointJournal:
     """JSONL-журнал испытаний для возобновления длинных живых прогонов.
 
@@ -42,12 +49,21 @@ class _CheckpointJournal:
     строка fsync'ится немедленно. Падение процесса по ЛЮБОЙ причине
     теряет максимум текущий вызов.
 
-    Возобновление отказывает при несовпадении датасета или конфигурации:
-    иначе доигрывание молча смешало бы результаты двух разных прогонов —
-    аудит утверждал бы то, чего не измерял.
+    Возобновление отказывает при несовпадении датасета, конфигурации,
+    числа повторений или ИДЕНТИЧНОСТИ ЧЕКЕРА (заголовок несёт CHECKER_ID):
+    иначе доигрывание молча смешало бы результаты двух разных прогонов или
+    двух разных метрик — аудит утверждал бы то, чего не измерял.
     """
 
-    PROTOCOL = "llm-flow-checkpoint/1"
+    # /2: семантика чекера сменилась (ANSWER= стал якориться к последней
+    # строке), а dataset_sha256 хеширует только текст промпта и ожидания —
+    # смену метрики он не видит. Журналы /1 (префиксный чекер) обязаны
+    # отвергаться, иначе один аудит смешает две метрики.
+    PROTOCOL = "llm-flow-checkpoint/2"
+    # Идентичность чекера в самом заголовке: следующая смена семантики
+    # отловится сравнением заголовков автоматически, а не по памяти о бампе.
+    # ПРАВИЛО: любое изменение _expect_met обязано менять эту строку.
+    CHECKER_ID = "expect_contains:substring+ANSWER-last-line@v2"
 
     def __init__(
         self,
@@ -60,6 +76,7 @@ class _CheckpointJournal:
         self._records: dict[tuple[int, int], dict[str, Any]] = {}
         header = {
             "protocol": self.PROTOCOL,
+            "checker": self.CHECKER_ID,
             "dataset_sha256": dataset_sha256,
             "endpoint": endpoint,
             # Предрегистрация фиксирует repetitions — заголовок обязан
@@ -96,6 +113,7 @@ class _CheckpointJournal:
 
         if (
             stored_header.get("protocol") != self.PROTOCOL
+            or stored_header.get("checker") != header["checker"]
             or stored_header.get("dataset_sha256") != header["dataset_sha256"]
             or stored_header.get("endpoint") != header["endpoint"]
             or stored_header.get("repetitions") != header["repetitions"]
@@ -511,6 +529,7 @@ class LLMFlowAuditor:
         delta: float,
         confidence: float = 0.95,
         repetitions: int = 1,
+        replay_tolerance: float = DEFAULT_REPLAY_TOLERANCE,
     ) -> dict[str, Any]:
         """Обязательство аудита, регистрируемое в цепочке ДО прогона.
 
@@ -535,6 +554,14 @@ class LLMFlowAuditor:
             "delta": delta,
             "confidence": confidence,
             "repetitions": max(1, int(repetitions)),
+            # Допуск реплея (раскрытие, того же рода что MDD): обслуживаемый
+            # эндпоинт недетерминирован во времени даже при temperature 0 —
+            # измерение 2026-08-23: поэлементный дрейф одной модели между
+            # прогонами 1-4 из 90 (до 4.4%), совокупный pass rate стабилен.
+            # Честный повторитель обязан допускать такую долю расхождений;
+            # без предрегистрированного допуска честная проверка выглядит
+            # подлогом, а настоящий подлог прячется внутри допуска.
+            "replay_tolerance": max(0.0, min(1.0, float(replay_tolerance))),
             "endpoints": pricing,
         }
 

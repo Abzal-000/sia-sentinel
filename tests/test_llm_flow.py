@@ -329,7 +329,11 @@ class CheckpointResumeTestCase(unittest.TestCase):
         )
         header = json.loads(self.checkpoint.read_text(encoding="utf-8").splitlines()[0])
 
-        self.assertEqual(header["protocol"], "llm-flow-checkpoint/1")
+        from sia.llm_flow import _CheckpointJournal
+
+        self.assertEqual(header["protocol"], _CheckpointJournal.PROTOCOL)
+        self.assertEqual(header["checker"], _CheckpointJournal.CHECKER_ID)
+        self.assertEqual(header["repetitions"], 2)
         commitment = LLMFlowAuditor.preregistration_commitment(
             self.dataset, self.config, self.config, delta=0.05
         )
@@ -377,6 +381,53 @@ class CheckpointResumeTestCase(unittest.TestCase):
         self.assertEqual(len(trials), 24)  # 12 элементов × 2 повторения
         keys = {(t["item"], t["rep"]) for t in trials}
         self.assertEqual(len(keys), 24)  # ни одного дубликата
+
+    def test_legacy_protocol_v1_journal_refused(self) -> None:
+        """Журналы пробы с префиксным чекером (/1) не доигрываются новым кодом:
+        семантика метрики сменилась, а dataset_sha256 её не видит."""
+        import json
+
+        self.checkpoint.parent.mkdir(parents=True, exist_ok=True)
+        legacy_header = {
+            "protocol": "llm-flow-checkpoint/1",
+            "dataset_sha256": self.auditor._dataset_hash(self.dataset),
+            "endpoint": self.config.public_dict(),
+            "repetitions": 2,
+        }
+        self.checkpoint.write_text(
+            json.dumps(legacy_header, sort_keys=True) + "\n", encoding="utf-8"
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            self.auditor.evaluate_config(
+                SimulatedLLMClient(self.config), self.dataset, 2,
+                self.cost_model, checkpoint=self.checkpoint,
+            )
+
+        self.assertIn("different dataset or configuration", str(ctx.exception))
+
+    def test_checker_identity_mismatch_refused(self) -> None:
+        """Смена семантики чекера ловится сравнением заголовков автоматически."""
+        import json
+
+
+        self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,
+            checkpoint=self.checkpoint,
+        )
+        lines = self.checkpoint.read_text(encoding="utf-8").splitlines()
+        header = json.loads(lines[0])
+        header["checker"] = "expect_contains:substring@v1"  # «старый» чекер
+        self.checkpoint.write_text(
+            "\n".join([json.dumps(header, sort_keys=True)] + lines[1:]) + "\n",
+            encoding="utf-8",
+        )
+
+        with self.assertRaises(ValueError):
+            self.auditor.evaluate_config(
+                SimulatedLLMClient(self.config), self.dataset, 2,
+                self.cost_model, checkpoint=self.checkpoint,
+            )
 
     def test_resume_refuses_different_repetitions(self) -> None:
         # Предрегистрация фиксирует R — заголовок журнала обязан нести то

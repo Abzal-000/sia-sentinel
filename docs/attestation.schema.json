@@ -17,60 +17,201 @@
   ],
   "additionalProperties": false,
   "properties": {
-    "schema_version": { "const": "1" },
-    "spec": { "const": "sia-attestation/1" },
-    "attestation_id": { "type": "string", "pattern": "^[0-9a-f]{32}$" },
-    "issued_at": { "type": ["string", "null"] },
+    "schema_version": {
+      "const": "1"
+    },
+    "spec": {
+      "const": "sia-attestation/1"
+    },
+    "attestation_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{32}$"
+    },
+    "issued_at": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
     "issuer": {
       "type": "object",
-      "required": ["name", "public_key", "algorithm"],
+      "required": [
+        "name",
+        "public_key",
+        "algorithm"
+      ],
       "additionalProperties": false,
       "properties": {
-        "name": { "type": "string" },
-        "public_key": { "type": "string" },
-        "kid": { "type": ["string", "null"], "pattern": "^[0-9a-f]{0,64}$" },
-        "algorithm": { "const": "Ed25519-SHA256" }
+        "name": {
+          "type": "string"
+        },
+        "public_key": {
+          "type": "string"
+        },
+        "kid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{0,64}$"
+        },
+        "algorithm": {
+          "const": "Ed25519-SHA256"
+        }
       }
     },
     "subject": {
       "type": "object",
-      "required": ["flow_name", "kind", "mode"],
+      "required": [
+        "flow_name",
+        "kind",
+        "mode"
+      ],
       "additionalProperties": false,
       "properties": {
-        "flow_name": { "type": ["string", "null"] },
-        "kind": { "type": ["string", "null"] },
-        "mode": { "type": ["string", "null"] }
+        "flow_name": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "claim": {
       "type": "object",
-      "required": ["savings_verified", "savings_ratio"],
+      "required": [
+        "savings_verified",
+        "savings_ratio"
+      ],
       "additionalProperties": false,
       "properties": {
-        "savings_verified": { "type": ["boolean", "null"] },
-        "savings_ratio": { "type": ["number", "null"] },
+        "savings_verified": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "savings_ratio": {
+          "type": [
+            "number",
+            "null"
+          ]
+        },
         "paired": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "non_inferior": { "type": ["boolean", "null"] },
-            "delta": { "type": ["number", "null"] },
-            "mcnemar_p": { "type": ["number", "null"] },
-            "minimum_detectable_difference": { "type": ["number", "null"] },
-            "n_pairs": { "type": ["integer", "null"] },
-            "b_old_pass_new_fail": { "type": ["integer", "null"] },
-            "c_old_fail_new_pass": { "type": ["integer", "null"] },
-            "ci_lower": { "type": ["number", "null"] },
-            "ci_upper": { "type": ["number", "null"] }
+            "non_inferior": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            },
+            "delta": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "mcnemar_p": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "minimum_detectable_difference": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "n_pairs": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "b_old_pass_new_fail": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "c_old_fail_new_pass": {
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "ci_lower": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "ci_upper": {
+              "type": [
+                "number",
+                "null"
+              ]
+            }
           }
         },
         "preregistration": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "additionalProperties": false,
           "properties": {
-            "dataset_sha256": { "type": ["string", "null"] },
-            "delta": { "type": ["number", "null"] },
-            "metric": { "type": ["string", "null"] }
+            "dataset_sha256": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "delta": {
+              "type": [
+                "number",
+                "null"
+              ]
+            },
+            "metric": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "repetitions": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 1
+            },
+            "replay_tolerance": {
+              "type": [
+                "number",
+                "null"
+              ],
+              "exclusiveMinimum": 0,
+              "maximum": 1
+            }
           }
         }
       }
@@ -89,16 +230,44 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "receipt_id": { "type": "string" },
-        "evidence_id": { "type": "string" },
-        "code_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "safety_approved": { "type": "boolean" },
-        "trust_level": { "type": "string" },
-        "timestamp": { "type": "number" },
-        "nonce": { "type": "string" },
-        "signature": { "type": "string" },
-        "manifest": { "type": ["object", "null"] },
-        "kid": { "type": ["string", "null"], "pattern": "^[0-9a-f]{0,64}$" }
+        "receipt_id": {
+          "type": "string"
+        },
+        "evidence_id": {
+          "type": "string"
+        },
+        "code_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "safety_approved": {
+          "type": "boolean"
+        },
+        "trust_level": {
+          "type": "string"
+        },
+        "timestamp": {
+          "type": "number"
+        },
+        "nonce": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "manifest": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "kid": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9a-f]{0,64}$"
+        }
       }
     },
     "verification": {
@@ -110,9 +279,19 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "receipt_signature_valid": { "type": ["boolean", "null"] },
-        "ledger_chain_valid": { "type": "boolean" },
-        "ledger_entries": { "type": "integer", "minimum": 0 }
+        "receipt_signature_valid": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "ledger_chain_valid": {
+          "type": "boolean"
+        },
+        "ledger_entries": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     }
   }
