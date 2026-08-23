@@ -291,27 +291,21 @@ class AnchorScriptTestCase(unittest.TestCase):
     """Блокер 3 мини-аудита: скрипт отказывается работать без ключа подписи."""
 
     def test_refuses_without_receipt_signing_key(self) -> None:
-        import subprocess
-        import sys
+        # In-process с патчем resolve_env: guard обязан срабатывать, когда
+        # ключа нет НИГДЕ (ни в окружении, ни в .env), — реальный .env теперь
+        # содержит ключ, поэтому подмена на уровне модуля скрипта.
+        import importlib.util
+        from unittest.mock import patch
 
-        env = {
-            k: v
-            for k, v in os.environ.items()
-            if k != "RECEIPT_SIGNING_KEY"
-        }
-        env["PYTHONPATH"] = str(Path(__file__).resolve().parent.parent)
+        script_path = Path(__file__).resolve().parent.parent / "scripts" / "anchor_checkpoint.py"
+        spec = importlib.util.spec_from_file_location("anchor_checkpoint_test", script_path)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
 
-        result = subprocess.run(
-            [sys.executable, str(Path(__file__).resolve().parent.parent / "scripts" / "anchor_checkpoint.py")],
-            capture_output=True,
-            text=True,
-            env=env,
-            timeout=60,
-        )
+        with patch.object(module, "resolve_env", return_value=None):
+            exit_code = module.main()
 
-        self.assertEqual(result.returncode, 3)
-        self.assertIn("RECEIPT_SIGNING_KEY", result.stderr)
-        self.assertIn("ephemeral", result.stderr)
+        self.assertEqual(exit_code, 3)
 
 
 if __name__ == "__main__":

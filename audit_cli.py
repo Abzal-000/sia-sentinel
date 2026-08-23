@@ -65,10 +65,13 @@ def audit_code_flow(flow: dict[str, Any]) -> dict[str, Any]:
     return run_flow_audit(flow)
 
 
-def audit_llm_flow(flow: dict[str, Any]) -> dict[str, Any]:
+def audit_llm_flow(
+    flow: dict[str, Any],
+    checkpoint_dir: Any = None,
+) -> dict[str, Any]:
     """Совместимость: аудит llm_flow через общий движок."""
     flow = {**flow, "kind": "llm_flow"}
-    return run_flow_audit(flow)
+    return run_flow_audit(flow, checkpoint_dir=checkpoint_dir)
 
 
 def to_markdown(report: dict[str, Any]) -> str:
@@ -273,12 +276,21 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", default=None, help="Write JSON report to this file")
     parser.add_argument("--markdown", default=None, help="Write Markdown report to this file")
     parser.add_argument("--sign", default=None, help="Write signed Ed25519 receipt to this file")
+    parser.add_argument(
+        "--checkpoint-dir", default=None,
+        help=(
+            "Directory for JSONL resume journals of live llm_flow runs: a "
+            "crash (timeout, 429, Ctrl-C) loses at most the in-flight call; "
+            "rerun with the same flag to continue"
+        ),
+    )
 
     return parser
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_arg_parser().parse_args(argv)
+    checkpoint_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else None
 
     flow = _load_flow(args.flow)
     flow["_base_dir"] = str(Path(args.flow).resolve().parent)
@@ -286,7 +298,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     kind = flow.get("kind", "code")
 
     if kind == "llm_flow":
-        report = audit_llm_flow(flow)
+        report = audit_llm_flow(flow, checkpoint_dir=checkpoint_dir)
     elif kind == "optimize":
         report = run_flow_audit(flow)
     else:

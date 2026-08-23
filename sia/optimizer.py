@@ -219,7 +219,7 @@ class SavingsOptimizer:
             client = self.client_factory(config)
             cost_model = CostModel(config.resolve_pricing(self.defaults))
 
-            usage, failed, passed, total, _item_passes = LLMFlowAuditor.evaluate_config(
+            usage, failed, passed, total, _item_passes = self._auditor.evaluate_config(
                 client, dataset, repetitions, cost_model
             )
         except Exception as exc:
@@ -371,7 +371,7 @@ class SavingsOptimizer:
 
         # Базовая конфигурация оценивается всегда: её стоимость — точка отсчёта
         baseline_client = self.client_factory(baseline)
-        baseline_usage, _, _, _, _ = LLMFlowAuditor.evaluate_config(
+        baseline_usage, _, _, _, _ = self._auditor.evaluate_config(
             baseline_client,
             goal.dataset,
             repetitions=1,

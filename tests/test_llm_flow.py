@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
-from sia.cost_model import PricingConfig
+from sia.cost_model import CostModel, PricingConfig
 from sia.llm_flow import (
     CompletionResult,
     LLMEndpointConfig,
@@ -230,6 +231,147 @@ class LiveClientRetryTestCase(unittest.TestCase):
 
         self.assertEqual(client._client.max_retries, 3)
         self.assertEqual(client._client.timeout, 30.0)
+
+
+class CheckpointResumeTestCase(unittest.TestCase):
+    """Чекпойнт живых прогонов: краш теряет максимум текущий вызов."""
+
+    def setUp(self) -> None:
+        import tempfile
+
+        self._tmp = tempfile.TemporaryDirectory()
+        self.auditor = LLMFlowAuditor(
+            client_factory=lambda config: SimulatedLLMClient(config)
+        )
+        self.cost_model = CostModel(PricingConfig())
+        self.dataset = [
+            {"prompt": f"Question {i}?", "expect_contains": str(i % 10)}
+            for i in range(12)
+        ]
+        self.config = LLMEndpointConfig(model_name="m", profile="verbose", seed=7)
+        self.checkpoint = Path(self._tmp.name) / "probe" / "llm-audit-new.jsonl"
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _reference(self) -> tuple:
+        result = self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model
+        )
+        return result
+
+    def _flaky(self, fail_on_call: int):
+        inner = SimulatedLLMClient(self.config)
+        calls = {"n": 0}
+
+        class Flaky:
+            config = inner.config
+
+            def complete(self, prompt, expect=None):
+                calls["n"] += 1
+
+                if calls["n"] == fail_on_call:
+                    raise RuntimeError("timeout after retries")
+                return inner.complete(prompt, expect=expect)
+
+        return Flaky()
+
+    def test_header_matches_preregistration_commitment(self) -> None:
+        import json
+
+        self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,
+            checkpoint=self.checkpoint,
+        )
+        header = json.loads(self.checkpoint.read_text(encoding="utf-8").splitlines()[0])
+
+        self.assertEqual(header["protocol"], "llm-flow-checkpoint/1")
+        commitment = LLMFlowAuditor.preregistration_commitment(
+            self.dataset, self.config, self.config, delta=0.05
+        )
+        self.assertEqual(
+            header["dataset_sha256"], commitment["dataset_sha256"]
+        )
+        self.assertEqual(header["endpoint"], self.config.public_dict())
+
+    def test_crash_then_resume_equals_reference(self) -> None:
+        import json
+
+        reference = self._reference()
+
+        # Первый заход падает на 9-м вызове (после 8 записанных)
+        with self.assertRaises(RuntimeError):
+            self.auditor.evaluate_config(
+                self._flaky(fail_on_call=9), self.dataset, 2, self.cost_model,
+                checkpoint=self.checkpoint,
+            )
+
+        recorded = len(self.checkpoint.read_text(encoding="utf-8").splitlines()) - 1
+        self.assertEqual(recorded, 8)
+
+        # Возобновление тем же клиентом и путём — доигрывает без повторов
+        resumed = self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,
+            checkpoint=self.checkpoint,
+        )
+
+        ref_usage, _, ref_passed, ref_total, ref_passes = reference
+        res_usage, _, res_passed, res_total, res_passes = resumed
+
+        # Итоги возобновлённого прогона совпадают с бесаварийным референсом
+        self.assertEqual(res_usage.calls, ref_usage.calls)
+        self.assertEqual(res_usage.input_tokens, ref_usage.input_tokens)
+        self.assertEqual(res_usage.output_tokens, ref_usage.output_tokens)
+        self.assertEqual(res_usage.total_cost_usd, ref_usage.total_cost_usd)
+        self.assertEqual((res_passed, res_total), (ref_passed, ref_total))
+        self.assertEqual(res_passes, ref_passes)
+
+        trials = [
+            json.loads(line)
+            for line in self.checkpoint.read_text(encoding="utf-8").splitlines()[1:]
+        ]
+        self.assertEqual(len(trials), 24)  # 12 элементов × 2 повторения
+        keys = {(t["item"], t["rep"]) for t in trials}
+        self.assertEqual(len(keys), 24)  # ни одного дубликата
+
+    def test_resume_refuses_foreign_dataset_or_config(self) -> None:
+        self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,
+            checkpoint=self.checkpoint,
+        )
+
+        other_dataset = [{"prompt": "Other?", "expect_contains": "x"}]
+        other_config = LLMEndpointConfig(model_name="m", seed=99)  # другой seed -> другой public_dict
+
+        for bad_dataset, bad_config in (
+            (other_dataset, self.config),
+            (self.dataset, other_config),
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                self.auditor.evaluate_config(
+                    SimulatedLLMClient(bad_config), bad_dataset, 2,
+                    self.cost_model, checkpoint=self.checkpoint,
+                )
+
+            self.assertIn("different dataset or configuration", str(ctx.exception))
+
+    def test_torn_trailing_line_is_dropped_and_rerun(self) -> None:
+        self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,
+            checkpoint=self.checkpoint,
+        )
+
+        # Крах посреди записи: неполная последняя строка
+        with open(self.checkpoint, "a", encoding="utf-8") as handle:
+            handle.write('{"item": 11, "rep": 1, "ok": tru')
+
+        result = self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,
+            checkpoint=self.checkpoint,
+        )
+
+        reference = self._reference()
+        self.assertEqual(result[3], reference[3])  # total_trials как у референса
 
 
 if __name__ == "__main__":

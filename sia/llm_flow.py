@@ -17,15 +17,136 @@ from __future__ import annotations
 import datetime as _dt
 import hashlib
 import random
+import json
+import os
 import sys
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from .cost_model import CostModel, PricingConfig, SavingsResult
 from .evaluation_engine import resolve_confidence, wilson_confidence_interval
 from .statistics import non_inferiority_test
 from .models import EquivalenceReport
+
+
+class _CheckpointJournal:
+    """JSONL-журнал испытаний для возобновления длинных живых прогонов.
+
+    Зачем: на общем бесплатном пуле таймауты и 429 штатны (проверено
+    live-проверкой каталога), а длинный проб без сохранения — рулетка:
+    один обрыв на 180-м вызове теряет всё. Формат: первая строка —
+    заголовок {protocol, dataset_sha256, endpoint}, далее по строке на
+    ЗАВЕРШЁННЫЙ вызов {item, rep, ok, in, out, latency, usd}; каждая
+    строка fsync'ится немедленно. Падение процесса по ЛЮБОЙ причине
+    теряет максимум текущий вызов.
+
+    Возобновление отказывает при несовпадении датасета или конфигурации:
+    иначе доигрывание молча смешало бы результаты двух разных прогонов —
+    аудит утверждал бы то, чего не измерял.
+    """
+
+    PROTOCOL = "llm-flow-checkpoint/1"
+
+    def __init__(
+        self,
+        path: str | Path,
+        dataset_sha256: str,
+        endpoint: dict[str, Any],
+    ):
+        self._path = Path(path)
+        self._records: dict[tuple[int, int], dict[str, Any]] = {}
+        header = {
+            "protocol": self.PROTOCOL,
+            "dataset_sha256": dataset_sha256,
+            "endpoint": endpoint,
+        }
+
+        if self._path.exists():
+            self._load_existing(header)
+        else:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            self._append_line(header)
+
+    def _load_existing(self, header: dict[str, Any]) -> None:
+        nonempty = [
+            line for line in self._path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+        if not nonempty:
+            # Пустой файл (например, создан и не заполнен) — начинаем заново
+            self._path.write_text("", encoding="utf-8")
+            self._append_line(header)
+            return
+
+        try:
+            stored_header = json.loads(nonempty[0])
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"Checkpoint {self._path}: header is not valid JSON"
+            ) from exc
+
+        if (
+            stored_header.get("protocol") != self.PROTOCOL
+            or stored_header.get("dataset_sha256") != header["dataset_sha256"]
+            or stored_header.get("endpoint") != header["endpoint"]
+        ):
+            raise ValueError(
+                f"Checkpoint {self._path} belongs to a different dataset or "
+                "configuration; refusing to resume — mixing two runs would "
+                "make the audit claim what it did not measure."
+            )
+
+        torn_trailing = False
+
+        for line in nonempty[1:]:
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                # Оборванная последняя строка: след падения посреди записи;
+                # вызов не завершился — он будет выполнен заново
+                torn_trailing = True
+                continue
+
+            self._records[(record["item"], record["rep"])] = record
+
+        if torn_trailing:
+            print(
+                f"WARNING: checkpoint {self._path} had an incomplete trailing "
+                "line; it was dropped and the interrupted call will rerun."
+            )
+
+    def replay(self, item: int, rep: int) -> Optional[dict[str, Any]]:
+        """Записанный результат испытания или None (нужно выполнять)."""
+        return self._records.get((item, rep))
+
+    def record(
+        self,
+        item: int,
+        rep: int,
+        ok: bool,
+        input_tokens: int,
+        output_tokens: int,
+        latency_sec: float,
+        usd: float,
+    ) -> None:
+        self._append_line({
+            "item": item,
+            "rep": rep,
+            "ok": bool(ok),
+            "in": input_tokens,
+            "out": output_tokens,
+            "latency": latency_sec,
+            "usd": usd,
+        })
+
+    def _append_line(self, payload: dict[str, Any]) -> None:
+        with open(self._path, "a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, sort_keys=True) + "\n")
+            handle.flush()
+            os.fsync(handle.fileno())
 
 
 @dataclass(frozen=True)
@@ -377,24 +498,42 @@ class LLMFlowAuditor:
             "endpoints": pricing,
         }
 
-    @staticmethod
+    # Обычный метод (не staticmethod): возобновлению нужен
+    # self._dataset_hash для сверки заголовка чекпойнта с обязательством
     def evaluate_config(
+        self,
         client: Any,
         dataset: Sequence[dict[str, Any]],
         repetitions: int,
         cost_model: CostModel,
+        checkpoint: Optional[Path] = None,
     ) -> tuple[FlowUsage, list[str], int, int, list[bool]]:
         """Прогон одной конфигурации по датасету.
 
         Возвращает (usage, failed_labels, passed_trials, total_trials, item_passes).
         item_passes[i] = True если элемент i прошёл все повторения.
         Используется и парным аудитом, и оптимизатором (скрининг кандидатов).
+
+        checkpoint: необязательный JSONL-журнал возобновления (см.
+        _CheckpointJournal). Записанные испытания доигрываются в
+        аккумуляторы без повторного вызова, новые fsync'ятся сразу —
+        падение по любой причине теряет максимум текущий вызов.
+        Возобновление против другого датасета/конфигурации отклоняется.
         """
         tokens_in = tokens_out = latency = 0
         total_usd = 0.0
         failed: list[str] = []
         item_passes: list[bool] = []
         total_trials = passed_trials = 0
+
+        journal = None
+
+        if checkpoint is not None:
+            journal = _CheckpointJournal(
+                checkpoint,
+                dataset_sha256=self._dataset_hash(dataset),
+                endpoint=client.config.public_dict(),
+            )
 
         for index, item in enumerate(dataset):
             prompt = item.get("prompt", "")
@@ -403,21 +542,42 @@ class LLMFlowAuditor:
 
             item_passed_all = True
 
-            for _ in range(repetitions):
-                result = client.complete(prompt, expect=expect)
-                tokens_in += result.input_tokens
-                tokens_out += result.output_tokens
-                latency += result.latency_sec
-                total_usd += cost_model.token_cost(
-                    result.input_tokens, result.output_tokens
-                )
+            for rep in range(repetitions):
+                recorded = journal.replay(index, rep) if journal else None
 
-                if expect is not None and expect not in result.text:
+                if recorded is not None:
+                    # Доигрывание: результат уже в журнале — вызов не повторяем
+                    tokens_in += recorded["in"]
+                    tokens_out += recorded["out"]
+                    latency += recorded["latency"]
+                    total_usd += recorded["usd"]
+                    ok = bool(recorded["ok"])
+                else:
+                    result = client.complete(prompt, expect=expect)
+                    tokens_in += result.input_tokens
+                    tokens_out += result.output_tokens
+                    latency += result.latency_sec
+                    usd = cost_model.token_cost(
+                        result.input_tokens, result.output_tokens
+                    )
+                    total_usd += usd
+                    ok = expect is None or expect in result.text
+
+                    if journal is not None:
+                        journal.record(
+                            index, rep, ok,
+                            result.input_tokens,
+                            result.output_tokens,
+                            result.latency_sec,
+                            usd,
+                        )
+
+                if not ok:
                     item_passed_all = False
 
                 total_trials += 1
 
-                if expect is None or expect in result.text:
+                if ok:
                     passed_trials += 1
 
             item_passes.append(item_passed_all)
@@ -443,6 +603,7 @@ class LLMFlowAuditor:
         repetitions: int = 1,
         confidence: float = 0.95,
         delta: float = 0.05,
+        checkpoint_dir: Optional[Path] = None,
     ) -> FlowAuditReport:
         if not dataset:
             raise ValueError("Dataset must contain at least one item")
@@ -471,11 +632,23 @@ class LLMFlowAuditor:
         old_cost_model = CostModel(old_pricing)
         new_cost_model = CostModel(new_pricing)
 
+        # Чекпойнты по стороне (old/new): заголовок каждого содержит хеш
+        # датасета и public_dict() своей конфигурации; возобновление после
+        # падения доигрывает записанные вызовы без повторных обращений к API.
+        old_checkpoint = (
+            checkpoint_dir / "llm-audit-old.jsonl" if checkpoint_dir else None
+        )
+        new_checkpoint = (
+            checkpoint_dir / "llm-audit-new.jsonl" if checkpoint_dir else None
+        )
+
         usage_old, old_failed, _, _, old_passes = self.evaluate_config(
-            old_client, dataset, repetitions, old_cost_model
+            old_client, dataset, repetitions, old_cost_model,
+            checkpoint=old_checkpoint,
         )
         usage_new, new_failed, passed_trials, total_trials, new_passes = self.evaluate_config(
-            new_client, dataset, repetitions, new_cost_model
+            new_client, dataset, repetitions, new_cost_model,
+            checkpoint=new_checkpoint,
         )
 
         costs = CostModel().compare(

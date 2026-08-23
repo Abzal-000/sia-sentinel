@@ -91,3 +91,7 @@ data/
 
 # Downloaded datasets for beacon preparation (e.g. GSM8K)
 .cache/
+
+# Archived pre-isolation runtime state (do not publish)
+receipts_stale_*/
+evidence_stale_*/

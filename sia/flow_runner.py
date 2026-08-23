@@ -14,7 +14,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Literal, overload
+from typing import Any, Literal, Optional, overload
 
 from .audit import ProofOfSavingsAuditor
 from .config import resolve_env
@@ -83,12 +83,20 @@ def _safe_join(base_dir: str, relative: str) -> str:
     return str(candidate)
 
 
-def run_flow_audit(flow: dict[str, Any]) -> dict[str, Any]:
-    """Запускает аудит по флоу-декларации и возвращает отчёт (dict)."""
+def run_flow_audit(
+    flow: dict[str, Any],
+    checkpoint_dir: Optional[Path] = None,
+) -> dict[str, Any]:
+    """Запускает аудит по флоу-декларации и возвращает отчёт (dict).
+
+    checkpoint_dir: каталог JSONL-журналов возобновления для живых
+    llm_flow-прогонов (см. sia.llm_flow._CheckpointJournal). None — без
+    чекпойнта; API этот параметр не выставляет, это host-side забота.
+    """
     kind = flow.get("kind", "code")
 
     if kind == "llm_flow":
-        return _audit_llm_flow(flow)
+        return _audit_llm_flow(flow, checkpoint_dir=checkpoint_dir)
 
     if kind == "code":
         return _audit_code_flow(flow)
@@ -241,7 +249,10 @@ def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
     )
 
 
-def _audit_llm_flow(flow: dict[str, Any]) -> dict[str, Any]:
+def _audit_llm_flow(
+    flow: dict[str, Any],
+    checkpoint_dir: Optional[Path] = None,
+) -> dict[str, Any]:
     dataset = flow.get("dataset") or []
 
     if not dataset:
@@ -278,6 +289,7 @@ def _audit_llm_flow(flow: dict[str, Any]) -> dict[str, Any]:
         repetitions=repetitions,
         confidence=confidence,
         delta=delta,
+        checkpoint_dir=checkpoint_dir,
     )
 
     report_dict = report.to_dict()

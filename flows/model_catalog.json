@@ -1,7 +1,7 @@
 {
   "_note": "Seed catalog for Savings Autopilot. Prices are conservative mid-2026 references in USD per 1M tokens — edit for your actual provider contracts. api_key_env names an environment variable; the key itself never lives here. prices_as_of dates the pricing snapshot so claimed savings can be re-checked against the prices of that day; catalog_version identifies the pricing revision.",
   "prices_as_of": "2026-08-01",
-  "catalog_version": "2026.08",
+  "catalog_version": "2026.08-r2",
   "models": [
     {
       "model_name": "meta/llama-3.3-70b-instruct",
@@ -12,40 +12,39 @@
       "output_token_usd_per_m": 2.64,
       "tier": "premium",
       "context_window": 131072,
-      "tags": ["chat", "reasoning", "multilingual"]
+      "tags": [
+        "chat",
+        "reasoning",
+        "multilingual"
+      ]
     },
     {
       "model_name": "meta/llama-3.1-70b-instruct",
       "provider": "nvidia-nim",
       "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key_env": "NVIDIA_API_KEY",
-      "input_token_usd_per_m": 0.60,
-      "output_token_usd_per_m": 1.80,
+      "input_token_usd_per_m": 0.6,
+      "output_token_usd_per_m": 1.8,
       "tier": "premium",
       "context_window": 131072,
-      "tags": ["chat", "multilingual"]
+      "tags": [
+        "chat",
+        "multilingual"
+      ]
     },
     {
       "model_name": "nvidia/llama-3.1-nemotron-70b-instruct",
       "provider": "nvidia-nim",
       "base_url": "https://integrate.api.nvidia.com/v1",
       "api_key_env": "NVIDIA_API_KEY",
-      "input_token_usd_per_m": 0.60,
-      "output_token_usd_per_m": 1.80,
+      "input_token_usd_per_m": 0.6,
+      "output_token_usd_per_m": 1.8,
       "tier": "mid",
       "context_window": 131072,
-      "tags": ["chat", "reasoning"]
-    },
-    {
-      "model_name": "mistralai/mixtral-8x22b-instruct-v0.1",
-      "provider": "nvidia-nim",
-      "base_url": "https://integrate.api.nvidia.com/v1",
-      "api_key_env": "NVIDIA_API_KEY",
-      "input_token_usd_per_m": 0.60,
-      "output_token_usd_per_m": 1.80,
-      "tier": "mid",
-      "context_window": 65536,
-      "tags": ["chat", "multilingual"]
+      "tags": [
+        "chat",
+        "reasoning"
+      ]
     },
     {
       "model_name": "meta/llama-3.1-8b-instruct",
@@ -56,7 +55,10 @@
       "output_token_usd_per_m": 0.08,
       "tier": "economy",
       "context_window": 131072,
-      "tags": ["chat", "multilingual"]
+      "tags": [
+        "chat",
+        "multilingual"
+      ]
     },
     {
       "model_name": "meta/llama-3.2-3b-instruct",
@@ -67,7 +69,9 @@
       "output_token_usd_per_m": 0.06,
       "tier": "economy",
       "context_window": 131072,
-      "tags": ["chat"]
+      "tags": [
+        "chat"
+      ]
     },
     {
       "model_name": "mistralai/mistral-7b-instruct-v0.3",
@@ -78,7 +82,9 @@
       "output_token_usd_per_m": 0.08,
       "tier": "economy",
       "context_window": 32768,
-      "tags": ["chat"]
+      "tags": [
+        "chat"
+      ]
     }
   ]
 }
