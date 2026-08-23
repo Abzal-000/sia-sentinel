@@ -334,6 +334,63 @@ class CheckpointResumeTestCase(unittest.TestCase):
         keys = {(t["item"], t["rep"]) for t in trials}
         self.assertEqual(len(keys), 24)  # ни одного дубликата
 
+    def test_resume_refuses_different_repetitions(self) -> None:
+        # Предрегистрация фиксирует R — заголовок журнала обязан нести то
+        # же число, иначе доигрывание с другим R прошло бы молча
+        self.auditor.evaluate_config(
+            SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,
+            checkpoint=self.checkpoint,
+        )
+
+        with self.assertRaises(ValueError) as ctx:
+            self.auditor.evaluate_config(
+                SimulatedLLMClient(self.config), self.dataset, 3,
+                self.cost_model, checkpoint=self.checkpoint,
+            )
+
+        self.assertIn("different dataset or configuration", str(ctx.exception))
+
+    def test_hidden_pricing_fields_cannot_shift_token_cost(self) -> None:
+        """Сторож инварианта возобновления: всё, что влияет на token_cost,
+        обязано быть в public_dict() — иначе заголовок чекпойнта не
+        фиксирует ценовой базис, и доигрывание молча смешало бы базисы.
+
+        Механика: для каждого поля PricingConfig, ОТСУТСТВУЮЩЕГО в
+        public_dict(), мутация этого поля не должна менять token_cost.
+        Если завтра добавят плату за запрос и забудут вынести в
+        public_dict() — этот тест упадёт.
+        """
+        import dataclasses
+
+        from sia.cost_model import CostModel
+
+        config = LLMEndpointConfig(model_name="m")
+        public_keys = set(config.public_dict())
+        volume_in, volume_out = 1_000_000, 500_000
+        base_cost = CostModel(
+            config.resolve_pricing(PricingConfig())
+        ).token_cost(volume_in, volume_out)
+
+        for field in dataclasses.fields(PricingConfig):
+            if field.name in public_keys:
+                continue  # публично => заголовок чекпойнта его фиксирует
+
+            mutated_defaults = dataclasses.replace(
+                PricingConfig(),
+                **{field.name: type(123.0)(456.0)},
+            )
+            shifted_cost = CostModel(
+                config.resolve_pricing(mutated_defaults)
+            ).token_cost(volume_in, volume_out)
+
+            self.assertEqual(
+                base_cost, shifted_cost,
+                f"Поле PricingConfig.{field.name} отсутствует в "
+                "LLMEndpointConfig.public_dict(), но влияет на token_cost: "
+                "заголовок чекпойнта не зафиксирует его, и возобновление "
+                "молча смешает ценовые базисы. Добавьте поле в public_dict().",
+            )
+
     def test_resume_refuses_foreign_dataset_or_config(self) -> None:
         self.auditor.evaluate_config(
             SimulatedLLMClient(self.config), self.dataset, 2, self.cost_model,

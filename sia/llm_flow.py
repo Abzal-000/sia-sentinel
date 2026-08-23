@@ -54,6 +54,7 @@ class _CheckpointJournal:
         path: str | Path,
         dataset_sha256: str,
         endpoint: dict[str, Any],
+        repetitions: int,
     ):
         self._path = Path(path)
         self._records: dict[tuple[int, int], dict[str, Any]] = {}
@@ -61,6 +62,11 @@ class _CheckpointJournal:
             "protocol": self.PROTOCOL,
             "dataset_sha256": dataset_sha256,
             "endpoint": endpoint,
+            # Предрегистрация фиксирует repetitions — заголовок обязан
+            # нести то же число, иначе доигрывание с другим R прошло бы
+            # молча (отчёт не портится: ключ (item, rep), но дешевле
+            # отказаться, чем объяснять)
+            "repetitions": max(1, int(repetitions)),
         }
 
         if self._path.exists():
@@ -92,6 +98,7 @@ class _CheckpointJournal:
             stored_header.get("protocol") != self.PROTOCOL
             or stored_header.get("dataset_sha256") != header["dataset_sha256"]
             or stored_header.get("endpoint") != header["endpoint"]
+            or stored_header.get("repetitions") != header["repetitions"]
         ):
             raise ValueError(
                 f"Checkpoint {self._path} belongs to a different dataset or "
@@ -533,6 +540,7 @@ class LLMFlowAuditor:
                 checkpoint,
                 dataset_sha256=self._dataset_hash(dataset),
                 endpoint=client.config.public_dict(),
+                repetitions=repetitions,
             )
 
         for index, item in enumerate(dataset):

@@ -104,13 +104,24 @@ class ModelCatalogTestCase(unittest.TestCase):
                 ModelCatalog.from_json(path)
 
     def test_seed_catalog_loads(self) -> None:
-        """Сид-каталог проекта должен быть валидным."""
+        """Сид-каталог проекта должен быть валидным.
+
+        Курация 2026-08-22 (два раунда live-проверки на NIM) оставила
+        три живых эндпоинта: nemotron-70b и mistral-7b — 404 for account,
+        llama-3.2-3b — таймаут x3. Провенанс в _note каталога.
+        """
         catalog = ModelCatalog.from_json(
             Path(__file__).resolve().parent.parent / "flows" / "model_catalog.json"
         )
 
-        self.assertGreaterEqual(len(catalog), 5)
-        self.assertIsNotNone(catalog.get("meta/llama-3.1-8b-instruct"))
+        self.assertGreaterEqual(len(catalog), 3)
+        # Все три живых эндпоинта обязаны оставаться в каталоге
+        for model in (
+            "meta/llama-3.3-70b-instruct",
+            "meta/llama-3.1-70b-instruct",
+            "meta/llama-3.1-8b-instruct",
+        ):
+            self.assertIsNotNone(catalog.get(model), model)
 
 
 if __name__ == "__main__":

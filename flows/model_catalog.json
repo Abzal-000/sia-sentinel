@@ -1,7 +1,7 @@
 {
-  "_note": "Seed catalog for Savings Autopilot. Prices are conservative mid-2026 references in USD per 1M tokens — edit for your actual provider contracts. api_key_env names an environment variable; the key itself never lives here. prices_as_of dates the pricing snapshot so claimed savings can be re-checked against the prices of that day; catalog_version identifies the pricing revision.",
+  "_note": "Seed catalog for Savings Autopilot. Prices are conservative mid-2026 references in USD per 1M tokens — edit for your actual provider contracts. api_key_env names an environment variable; the key itself never lives here. prices_as_of dates the pricing snapshot so claimed savings can be re-checked against the prices of that day; catalog_version identifies the pricing revision. Endpoint curation 2026-08-22, two live probe rounds on NVIDIA NIM: removed nvidia/llama-3.1-nemotron-70b and mistralai/mistral-7b-v0.3 (404 Not found for account — exist globally but not granted to this key) and meta/llama-3.2-3b-instruct (timeout x3: 30s/120s/120s). Remaining three verified live. Failure modes are distinct: 410 = dead globally, 404-for-account = key grant, timeout = routing.",
   "prices_as_of": "2026-08-01",
-  "catalog_version": "2026.08-r2",
+  "catalog_version": "2026.08-r3",
   "models": [
     {
       "model_name": "meta/llama-3.3-70b-instruct",
@@ -33,20 +33,6 @@
       ]
     },
     {
-      "model_name": "nvidia/llama-3.1-nemotron-70b-instruct",
-      "provider": "nvidia-nim",
-      "base_url": "https://integrate.api.nvidia.com/v1",
-      "api_key_env": "NVIDIA_API_KEY",
-      "input_token_usd_per_m": 0.6,
-      "output_token_usd_per_m": 1.8,
-      "tier": "mid",
-      "context_window": 131072,
-      "tags": [
-        "chat",
-        "reasoning"
-      ]
-    },
-    {
       "model_name": "meta/llama-3.1-8b-instruct",
       "provider": "nvidia-nim",
       "base_url": "https://integrate.api.nvidia.com/v1",
@@ -58,32 +44,6 @@
       "tags": [
         "chat",
         "multilingual"
-      ]
-    },
-    {
-      "model_name": "meta/llama-3.2-3b-instruct",
-      "provider": "nvidia-nim",
-      "base_url": "https://integrate.api.nvidia.com/v1",
-      "api_key_env": "NVIDIA_API_KEY",
-      "input_token_usd_per_m": 0.02,
-      "output_token_usd_per_m": 0.06,
-      "tier": "economy",
-      "context_window": 131072,
-      "tags": [
-        "chat"
-      ]
-    },
-    {
-      "model_name": "mistralai/mistral-7b-instruct-v0.3",
-      "provider": "nvidia-nim",
-      "base_url": "https://integrate.api.nvidia.com/v1",
-      "api_key_env": "NVIDIA_API_KEY",
-      "input_token_usd_per_m": 0.05,
-      "output_token_usd_per_m": 0.08,
-      "tier": "economy",
-      "context_window": 32768,
-      "tags": [
-        "chat"
       ]
     }
   ]
