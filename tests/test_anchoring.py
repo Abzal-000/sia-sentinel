@@ -16,6 +16,7 @@ import sentinel.api as api_module
 from sentinel.anchoring import (
     FileAnchorTransport,
     HttpAnchorTransport,
+    RekorAnchorTransport,
     publish_checkpoint,
 )
 from sentinel.api import app, rate_limiter
@@ -26,22 +27,32 @@ from sentinel.tenancy import TenantManager, UsageMeter
 
 
 class _FakeHttpxResponse:
-    def __init__(self, status_code: int):
+    def __init__(self, status_code: int, json_payload: dict | None = None):
         self.status_code = status_code
+        self._json_payload = json_payload
+        self.text = ""
+
+    def json(self) -> dict:
+        if self._json_payload is None:
+            raise ValueError("no json payload configured")
+
+        return self._json_payload
 
 
 class _FakeHttpxModule:
     """Заменяет httpx внутри HttpAnchorTransport.publish."""
 
-    def __init__(self, status_code: int = 200):
+    def __init__(self, status_code: int = 200, json_payload: dict | None = None):
         self.status_code = status_code
+        self._json_payload = json_payload
         self.calls: list[dict] = []
 
-    def post(self, url, content=None, headers=None, timeout=None):
+    def post(self, url, content=None, headers=None, timeout=None, json=None):
         self.calls.append(
-            {"url": url, "content": content, "headers": headers, "timeout": timeout}
+            {"url": url, "content": content, "headers": headers,
+             "timeout": timeout, "json": json}
         )
-        return _FakeHttpxResponse(self.status_code)
+        return _FakeHttpxResponse(self.status_code, self._json_payload)
 
 
 class FileAnchorTransportTestCase(unittest.TestCase):
@@ -306,6 +317,181 @@ class AnchorScriptTestCase(unittest.TestCase):
             exit_code = module.main()
 
         self.assertEqual(exit_code, 3)
+
+
+class RekorAnchorTransportTestCase(unittest.TestCase):
+    """П.6 рецензии: публичный свидетель — hashedrekord в логе Sigstore.
+
+    Проверено живым прогоном против rekor.sigstore.dev: Rekor верифицирует
+    подпись при приёме; ветка Эд25519 требует алгоритм SHA-512 и подпись
+    над сырыми байтами дайджеста; ключ передаётся base64(PEM-текст).
+    """
+
+    def _inject_fake_httpx(self, fake) -> None:
+        original = sys.modules.get("httpx")
+        sys.modules["httpx"] = fake
+
+        self.addCleanup(lambda: sys.modules.__setitem__("httpx", original))
+
+    @staticmethod
+    def _checkpoint() -> dict:
+        return {
+            "protocol": "trustchain-checkpoint/2",
+            "checkpoint_id": "cp-rk",
+            "created_at": "2026-08-24T00:00:00+00:00",
+            "seq": 1,
+            "head_hash": "c" * 64,
+            "registry_id": "reg-1",
+            "tree_size": 1,
+            "root_hash": "d" * 64,
+            "kid": "0123456789abcdef",
+            "public_key": "pk",
+            "signature": "sig",
+        }
+
+    class _TestSigner:
+        signed_by = "test"
+
+        def __init__(self):
+            import base64
+
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import (
+                Ed25519PrivateKey,
+            )
+            from cryptography.hazmat.primitives.serialization import (
+                Encoding,
+                PublicFormat,
+            )
+
+            self.key = Ed25519PrivateKey.generate()
+            pem = self.key.public_key().public_bytes(
+                Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
+            )
+            self.public_pem_b64 = base64.b64encode(pem).decode("ascii")
+
+        def sign(self, payload: bytes) -> bytes:
+            return self.key.sign(payload)
+
+    def test_posts_verifiable_hashedrekord(self) -> None:
+        import base64
+        import hashlib as hashlib_mod
+
+        from sentinel.receipt_registry import _checkpoint_commitment
+
+        signer = self._TestSigner()
+        fake = _FakeHttpxModule(status_code=201, json_payload={"rk-1": {"logIndex": 7}})
+        self._inject_fake_httpx(fake)
+
+        checkpoint = self._checkpoint()
+        transport = RekorAnchorTransport(signer=signer)
+        result = transport.publish(checkpoint)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["rekor_uuid"], "rk-1")
+        self.assertEqual(result["rekor_index"], 7)
+        self.assertEqual(result["rekor_signed_by"], "test")
+
+        body = fake.calls[0]["json"]
+        self.assertEqual(body["apiVersion"], "0.0.1")
+        self.assertEqual(body["kind"], "hashedrekord")
+
+        spec = body["spec"]
+        expected = hashlib_mod.sha512(
+            _checkpoint_commitment(checkpoint)
+        ).hexdigest()
+        self.assertEqual(spec["data"]["hash"]["algorithm"], "sha512")
+        self.assertEqual(spec["data"]["hash"]["value"], expected)
+
+        # Подпись в записи реально проверяется приложенным ключом: Rekor
+        # верифицирует над sha512(декодированное значение хеша)
+        content = base64.b64decode(spec["signature"]["content"])
+        message = hashlib_mod.sha512(bytes.fromhex(expected)).digest()
+        signer.key.public_key().verify(content, message)
+
+        pem = base64.b64decode(spec["signature"]["publicKey"]["content"])
+        self.assertIn(b"BEGIN PUBLIC KEY", pem)
+
+    def test_conflict_means_already_anchored(self) -> None:
+        self._inject_fake_httpx(_FakeHttpxModule(status_code=409))
+
+        transport = RekorAnchorTransport(signer=self._TestSigner())
+        result = transport.publish(self._checkpoint())
+
+        self.assertTrue(result["ok"])
+        self.assertIn("already anchored", result["detail"])
+
+    def test_signing_failure_reported_before_http(self) -> None:
+        fake = _FakeHttpxModule(status_code=201)
+        self._inject_fake_httpx(fake)
+
+        class BrokenSigner:
+            signed_by = "broken"
+            public_pem_b64 = ""
+
+            def sign(self, payload: bytes) -> bytes:
+                raise RuntimeError("no key")
+
+        result = RekorAnchorTransport(signer=BrokenSigner()).publish(
+            self._checkpoint()
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertIn("cannot build entry", result["detail"])
+        self.assertEqual(fake.calls, [])
+
+    def test_http_error_reported_with_body(self) -> None:
+        self._inject_fake_httpx(_FakeHttpxModule(status_code=500))
+
+        transport = RekorAnchorTransport(signer=self._TestSigner())
+        result = transport.publish(self._checkpoint())
+
+        self.assertFalse(result["ok"])
+        self.assertIn("500", result["detail"])
+
+    def test_ssrf_url_rejected(self) -> None:
+        transport = RekorAnchorTransport(url="http://169.254.169.254/")
+
+        result = transport.publish(self._checkpoint())
+
+        self.assertFalse(result["ok"])
+        self.assertIn("rejected", result["detail"])
+
+    def test_rekor_opt_in_via_env(self) -> None:
+        import sentinel.anchoring as anchoring_module
+
+        class _StubFile:
+            name = "stub-file"
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def publish(self, checkpoint):
+                return {"ok": True, "detail": ""}
+
+        original_file = anchoring_module.FileAnchorTransport
+        anchoring_module.FileAnchorTransport = _StubFile
+        self.addCleanup(
+            setattr, anchoring_module, "FileAnchorTransport", original_file
+        )
+
+        original_flag = os.environ.get("REKOR_ANCHOR")
+        try:
+            os.environ.pop("REKOR_ANCHOR", None)
+            names_off = [
+                r["transport"] for r in anchoring_module.publish_checkpoint({})
+            ]
+            os.environ["REKOR_ANCHOR"] = "1"
+            names_on = [
+                r["transport"] for r in anchoring_module.publish_checkpoint({})
+            ]
+        finally:
+            if original_flag is None:
+                os.environ.pop("REKOR_ANCHOR", None)
+            else:
+                os.environ["REKOR_ANCHOR"] = original_flag
+
+        self.assertNotIn("rekor", names_off)
+        self.assertIn("rekor", names_on)
 
 
 if __name__ == "__main__":
