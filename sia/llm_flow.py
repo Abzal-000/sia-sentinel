@@ -37,6 +37,17 @@ from .models import EquivalenceReport
 # ключом flow "replay_tolerance"; значение попадает в обязательство до прогона.
 DEFAULT_REPLAY_TOLERANCE = 0.05
 
+# Правило учёта допуска реплея (в обязательстве с sia-preregistration/2).
+# Скалярная доля не различает направление расхождения: честный повторитель
+# получает дрейф симметрично в обе стороны, подлог толкает только в
+# выгодную. Поэтому поэлементные расхождения считаются раздельно —
+# сдвигающие результат К заявлению аудита (новый прошёл там, где записан
+# провал, либо старый упал там, где записан успех) и от него — и порог
+# применяется к односторонней доле «к заявлению». При том же числе 0.05
+# это заметно строже к подлогу: односторонняя доля подделки примерно
+# вдвое меньше двусторонней, комфорт честного повторителя сохраняется.
+REPLAY_TOLERANCE_RULE = "directional-one-sided:toward-claim"
+
 
 class _CheckpointJournal:
     """JSONL-журнал испытаний для возобновления длинных живых прогонов.
@@ -44,9 +55,10 @@ class _CheckpointJournal:
     Зачем: на общем бесплатном пуле таймауты и 429 штатны (проверено
     live-проверкой каталога), а длинный проб без сохранения — рулетка:
     один обрыв на 180-м вызове теряет всё. Формат: первая строка —
-    заголовок {protocol, dataset_sha256, endpoint}, далее по строке на
-    ЗАВЕРШЁННЫЙ вызов {item, rep, ok, in, out, latency, usd}; каждая
-    строка fsync'ится немедленно. Падение процесса по ЛЮБОЙ причине
+    заголовок {protocol, checker, dataset_sha256, endpoint, repetitions},
+    далее по строке на ЗАВЕРШЁННЫЙ вызов {item, rep, ok, in, out, latency,
+    usd, smodel, sfp}; smodel/sfp — отпечаток обслужившего бэкенда.
+    Каждая строка fsync'ится немедленно. Падение процесса по ЛЮБОЙ причине
     теряет максимум текущий вызов.
 
     Возобновление отказывает при несовпадении датасета, конфигурации,
@@ -59,7 +71,14 @@ class _CheckpointJournal:
     # строке), а dataset_sha256 хеширует только текст промпта и ожидания —
     # смену метрики он не видит. Журналы /1 (префиксный чекер) обязаны
     # отвергаться, иначе один аудит смешает две метрики.
-    PROTOCOL = "llm-flow-checkpoint/2"
+    # /3: изменилась ФОРМА ЗАПИСИ — появились smodel/sfp. Заголовок форму
+    # записи не хеширует и наличие полей не сверяет: /2-журнал, написанный
+    # до расширения, возобновился бы молча, и агрегат «что реально
+    # отвечало» покрыл бы только вызовы после обрыва — в опубликованном
+    # артефакте это невидимо. Правило то же, что у CHECKER_ID ниже: смена
+    # содержимого журнала обязана бампить протокол структурно, а не «по
+    # памяти». /2 прожил меньше суток и валидных журналов не оставил.
+    PROTOCOL = "llm-flow-checkpoint/3"
     # Идентичность чекера в самом заголовке: следующая смена семантики
     # отловится сравнением заголовков автоматически, а не по памяти о бампе.
     # ПРАВИЛО: любое изменение _expect_met обязано менять эту строку.
@@ -156,7 +175,12 @@ class _CheckpointJournal:
         output_tokens: int,
         latency_sec: float,
         usd: float,
+        served_model_name: Optional[str] = None,
+        system_fingerprint: Optional[str] = None,
     ) -> None:
+        # Отпечатки идут в журнал вместе с результатом: после возобновления
+        # агрегат «что реально отвечало» обязан покрывать ВЕСЬ прогон, а не
+        # только вызовы после обрыва
         self._append_line({
             "item": item,
             "rep": rep,
@@ -165,6 +189,8 @@ class _CheckpointJournal:
             "out": output_tokens,
             "latency": latency_sec,
             "usd": usd,
+            "smodel": served_model_name,
+            "sfp": system_fingerprint,
         })
 
     def _append_line(self, payload: dict[str, Any]) -> None:
@@ -176,12 +202,22 @@ class _CheckpointJournal:
 
 @dataclass(frozen=True)
 class CompletionResult:
-    """Результат одного вызова конфигурации."""
+    """Результат одного вызова конфигурации.
+
+    served_model_name/system_fingerprint — что РЕАЛЬНО ответило, по версии
+    самого эндпоинта. Запрошенное имя модели защищает от чего угодно,
+    кроме молчаливой подмены сборки провайдером посреди прогона: парность
+    старой/новой стороны имеет смысл, только если каждую сторону весь прогон
+    обслужив один и тот же бэкенд. У части провайдеров поля нет — тогда
+    здесь None, и это честно публикуется.
+    """
 
     text: str
     input_tokens: int
     output_tokens: int
     latency_sec: float
+    served_model_name: Optional[str] = None
+    system_fingerprint: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -213,6 +249,11 @@ class LLMEndpointConfig:
     # NVIDIA не публикует, и делает вывод, что аудитор ошибся.
     price_source_url: Optional[str] = None
     priced_model_name: Optional[str] = None
+    # Само раскрытие базы цены одной фразой: «эндпоинт обслуживает NVIDIA,
+    # тарифы — публичный список OpenRouter для такого-то чекпоинта; те же
+    # веса, другой сервинг». Раньше эта оговорка жила только в каталоге,
+    # которого квитанция не содержит.
+    price_basis_note: Optional[str] = None
 
     def resolve_pricing(self, defaults: PricingConfig) -> PricingConfig:
         return PricingConfig(
@@ -244,6 +285,7 @@ class LLMEndpointConfig:
             "catalog_version": self.catalog_version,
             "price_source_url": self.price_source_url,
             "priced_model_name": self.priced_model_name,
+            "price_basis_note": self.price_basis_note,
         }
 
 
@@ -356,6 +398,8 @@ class SimulatedLLMClient:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             latency_sec=latency_sec,
+            served_model_name=self.config.model_name,
+            system_fingerprint="simulated",
         )
 
 
@@ -404,6 +448,8 @@ class OpenAICompatibleClient:
             input_tokens=getattr(usage, "prompt_tokens", CostModel.estimate_tokens(prompt)),
             output_tokens=getattr(usage, "completion_tokens", CostModel.estimate_tokens(text)),
             latency_sec=latency_sec,
+            served_model_name=getattr(response, "model", None),
+            system_fingerprint=getattr(response, "system_fingerprint", None),
         )
 
 
@@ -416,6 +462,15 @@ class FlowUsage:
     output_tokens: int
     latency_sec: float
     total_cost_usd: float
+    # Уникальные бэкенды, фактически ответившие в этом прогоне (п.3):
+    # отсортированы для детерминизма отчёта
+    served_model_names: tuple[str, ...] = ()
+    system_fingerprints: tuple[str, ...] = ()
+    # Сколько вызовов сообщили system_fingerprint из общего числа calls:
+    # «одно значение в множестве» без покрытия не доказывает, что весь
+    # прогон обслужив один бэкенд — прогон с 3 ответившими из 450 публикует
+    # тот же список, что прогон со всеми 450. Покрытие идёт в манифест.
+    system_fingerprint_calls: int = 0
 
     @property
     def unit_cost_usd(self) -> float:
@@ -433,6 +488,9 @@ class FlowUsage:
             "avg_latency_sec": round(self.avg_latency_sec, 6),
             "total_cost_usd": round(self.total_cost_usd, 8),
             "unit_cost_usd": round(self.unit_cost_usd, 8),
+            "served_model_names": list(self.served_model_names),
+            "system_fingerprints": list(self.system_fingerprints),
+            "system_fingerprint_calls": self.system_fingerprint_calls,
         }
 
 
@@ -519,7 +577,12 @@ class LLMFlowAuditor:
         )
         return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
-    PREREGISTRATION_PROTOCOL = "sia-preregistration/1"
+    # /3: в эндпоинты обязательства добавлено price_basis_note — форма
+    # обязательства снова изменилась. Бамп структурный, по тому же правилу,
+    # что у журнала ниже: заголовки/сравнения не хешируют словарь
+    # обязательств целиком, а /2 был отчеканен и аннулирован в один день до
+    # записи №1 — валидных обязательств /2 не существует.
+    PREREGISTRATION_PROTOCOL = "sia-preregistration/3"
 
     @staticmethod
     def preregistration_commitment(
@@ -562,6 +625,9 @@ class LLMFlowAuditor:
             # без предрегистрированного допуска честная проверка выглядит
             # подлогом, а настоящий подлог прячется внутри допуска.
             "replay_tolerance": max(0.0, min(1.0, float(replay_tolerance))),
+            # Направленное правило учёта допуска: порог — на односторонней
+            # доле «к заявлению», а не на суммарной (см. константу выше).
+            "replay_tolerance_rule": REPLAY_TOLERANCE_RULE,
             "endpoints": pricing,
         }
 
@@ -592,6 +658,9 @@ class LLMFlowAuditor:
         failed: list[str] = []
         item_passes: list[bool] = []
         total_trials = passed_trials = 0
+        served_models: set[str] = set()
+        served_fingerprints: set[str] = set()
+        fingerprint_calls = 0
 
         journal = None
 
@@ -620,6 +689,11 @@ class LLMFlowAuditor:
                     latency += recorded["latency"]
                     total_usd += recorded["usd"]
                     ok = bool(recorded["ok"])
+                    if recorded.get("smodel"):
+                        served_models.add(recorded["smodel"])
+                    if recorded.get("sfp") is not None:
+                        served_fingerprints.add(recorded["sfp"])
+                        fingerprint_calls += 1
                 else:
                     result = client.complete(prompt, expect=expect)
                     tokens_in += result.input_tokens
@@ -630,6 +704,11 @@ class LLMFlowAuditor:
                     )
                     total_usd += usd
                     ok = _expect_met(expect, result.text)
+                    if result.served_model_name:
+                        served_models.add(result.served_model_name)
+                    if result.system_fingerprint is not None:
+                        served_fingerprints.add(result.system_fingerprint)
+                        fingerprint_calls += 1
 
                     if journal is not None:
                         journal.record(
@@ -638,6 +717,8 @@ class LLMFlowAuditor:
                             result.output_tokens,
                             result.latency_sec,
                             usd,
+                            served_model_name=result.served_model_name,
+                            system_fingerprint=result.system_fingerprint,
                         )
 
                 if not ok:
@@ -659,6 +740,9 @@ class LLMFlowAuditor:
             output_tokens=tokens_out,
             latency_sec=latency,
             total_cost_usd=total_usd,
+            served_model_names=tuple(sorted(served_models)),
+            system_fingerprints=tuple(sorted(served_fingerprints)),
+            system_fingerprint_calls=fingerprint_calls,
         )
 
         return usage, failed, passed_trials, total_trials, item_passes
@@ -672,6 +756,7 @@ class LLMFlowAuditor:
         confidence: float = 0.95,
         delta: float = 0.05,
         checkpoint_dir: Optional[Path] = None,
+        candidate_selected_by: str = "user",
     ) -> FlowAuditReport:
         if not dataset:
             raise ValueError("Dataset must contain at least one item")
@@ -762,6 +847,15 @@ class LLMFlowAuditor:
 
         # Добавляем парную статистику в отчёт эквивалентности
         equivalence["paired"] = paired.to_dict()
+        # П.5: R и n — бюджетные пределы, объявленные ДО прогона, а не
+        # статистический вывод. Публикуются рядом с MDD, чтобы
+        # чувствительность не читалась как «аудитор выбрал удобную
+        # статистику»: это всё, что способен различить данный бюджет.
+        equivalence["paired"]["declared_limits"] = (
+            f"R={repetitions} repetitions per item over n={dataset_size} "
+            "items, both fixed at preregistration; the MDD is what this "
+            "budget can detect (80% power), not a quality statement."
+        )
 
         mode = "simulated" if isinstance(new_client, SimulatedLLMClient) else "live"
 
@@ -788,6 +882,34 @@ class LLMFlowAuditor:
             "repetitions": repetitions,
             "old_endpoint": old_config.public_dict(),
             "new_endpoint": new_config.public_dict(),
+            # П.3: запрошенные имена — в old/new_endpoint выше; здесь — что
+            # РЕАЛЬНО отвечало. Подмена сборки провайдером посреди прогона
+            # сломала бы парность незаметно; отпечатки делают её видимой.
+            # fingerprint_coverage — сколько вызовов сообщили отпечаток из
+            # скольких: без покрытия «одно значение в множестве» не
+            # доказывает постоянство бэкенда на всём прогоне.
+            "served_endpoints": {
+                "old": {
+                    "model_names": list(usage_old.served_model_names),
+                    "system_fingerprints": list(usage_old.system_fingerprints),
+                    "fingerprint_coverage": {
+                        "reported": usage_old.system_fingerprint_calls,
+                        "total": usage_old.calls,
+                    },
+                },
+                "new": {
+                    "model_names": list(usage_new.served_model_names),
+                    "system_fingerprints": list(usage_new.system_fingerprints),
+                    "fingerprint_coverage": {
+                        "reported": usage_new.system_fingerprint_calls,
+                        "total": usage_new.calls,
+                    },
+                },
+            },
+            # П.4: кто выбрал кандидата. Аудитор, заверяющий конфигурацию,
+            # которую выбрал его собственный оптимизатор, обязан это
+            # публиковать — иначе конфликт интересов невидим проверяющему.
+            "candidate_selected_by": candidate_selected_by,
         }
 
         return FlowAuditReport(

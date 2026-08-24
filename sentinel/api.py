@@ -601,6 +601,8 @@ def _extract_paired_stats(report: dict[str, Any]) -> dict[str, Any]:
         "c_old_fail_new_pass": paired.get("c_old_fail_new_pass"),
         "ci_lower": paired.get("ci_lower"),
         "ci_upper": paired.get("ci_upper"),
+        # R и n как объявленные до прогона пределы бюджета — рядом с MDD
+        "declared_limits": paired.get("declared_limits"),
     }
 
 
@@ -645,6 +647,10 @@ def _run_audit_and_register(
         metadata["dataset_sha256"] = prereg.get("dataset_sha256")
         metadata["delta"] = prereg.get("delta")
         metadata["metric"] = prereg.get("metric")
+        # Допуск реплея и правило его учёта: аттестация обязана нести
+        # раскрытие вместе с обязательством (sia-preregistration/2)
+        metadata["replay_tolerance"] = prereg.get("replay_tolerance")
+        metadata["replay_tolerance_rule"] = prereg.get("replay_tolerance_rule")
 
     # A5: парная статистика (delta, mcnemar_p, MDD) публикуется в metadata,
     # чтобы аттестация несла методологию вердикта, а не только итог.
@@ -1612,6 +1618,8 @@ def _build_attestation(registry_id: str) -> dict[str, Any]:
             "dataset_sha256": metadata.get("dataset_sha256"),
             "delta": metadata.get("delta"),
             "metric": metadata.get("metric"),
+            "replay_tolerance": metadata.get("replay_tolerance"),
+            "replay_tolerance_rule": metadata.get("replay_tolerance_rule"),
         }
 
     # C3: issuer несёт тот ключ, которым подписана именно эта квитанция

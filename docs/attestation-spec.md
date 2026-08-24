@@ -44,21 +44,38 @@ configuration. The verdict methodology is published in the attestation:
 | `non_inferior` | bool | Non-inferiority verdict: CI lower bound for `p_new − p_old` > `−delta` **and** MDD ≤ delta (the run could statistically have detected a delta-sized drop; zero discordance `b = c = 0` is exempt — the observed difference is exactly 0 and the published MDD carries the honesty). A verdict the gate blocks is reported as `inconclusive`, not `inferior`. |
 | `delta` | number | Pre-declared non-inferiority margin (0 = no quality drop tolerated; default for deterministic code suites). |
 | `mcnemar_p` | number | Exact McNemar two-sided p-value on discordant pairs. |
-| `minimum_detectable_difference` | number | MDD at n pairs, α = 1−confidence, 80% power: the smallest quality drop this audit could have noticed. Computed from `max(assumed, observed)` discordance — the observed rate `((b+c)/n)` is a floor-raiser, so the published MDD can never understate this run's blindness when discordance exceeds the 10% planning assumption. |
+| `minimum_detectable_difference` | number | MDD at n pairs, α = (1−confidence)/2, 80% power: the smallest quality drop this audit could have noticed. The verdict reads the lower bound of the two-sided confidence interval — a one-sided test at that α — so the MDD is computed for the same test that carries it (an earlier version used α = 1−confidence and overstated sensitivity). Computed from `max(assumed, observed)` discordance — the observed rate `((b+c)/n)` is a floor-raiser, so the published MDD can never understate this run's blindness when discordance exceeds the 10% planning assumption. |
 | `n_pairs` | integer | Number of paired observations. |
 | `b_old_pass_new_fail` | integer | Discordant pairs where old passed and new failed. |
 | `c_old_fail_new_pass` | integer | Discordant pairs where old failed and new passed. |
 | `ci_lower`, `ci_upper` | number | MOVER-style interval for `p_new − p_old`: quadratic combination of Wilson bounds on the discordant cells (no correlation correction; not Newcombe 2006, whose ψ-adjusted marginal construction calibrated worse on our n). |
+| `declared_limits` | string \| null | Budget limits frozen at preregistration, published next to the MDD so sensitivity is not mistaken for a chosen statistic: repetitions per item (R), dataset size (n), and a note that the MDD is what this budget can detect (80% power) — not a quality statement. |
 
 `savings_verified` requires quality preservation — `non_inferior = true`, or
 zero discordance (`b = c = 0`, observed quality identical; the claim remains
 honest given the published MDD) — **and** positive savings.
 
+**What actually served.** The signed manifest records, per side, the model
+identifiers and build fingerprints (`system_fingerprint`) returned by the
+endpoint during the run (missing fields are published as absent), together
+with the **fingerprint coverage** — how many of the side's calls reported a
+fingerprint out of how many ran. A single value in a set proves nothing on
+its own: a run where 3 of 450 calls reported a fingerprint publishes the
+same list as one where all 450 did. The requested model name alone does not
+protect against a silent provider-side swap of the served build mid-run —
+which would quietly break pairing; the fingerprints plus their coverage
+make it visible.
+
+**Who picked the candidate.** The manifest carries `candidate_selected_by`
+(`user` | `optimizer`). An auditor certifying a configuration its own
+optimizer selected has a conflict of interest; publishing who chose the
+candidate answers that objection without hiding it in the pipeline.
+
 ### 1.2 Preregistration (`claim.preregistration`)
 
 For `llm_flow`/`optimize` flows the audit parameters are committed to the
 ledger **before** the run (`POST /v1/preregistrations`, protocol
-`sia-preregistration/1`), clinical-trial style: no post-hoc dataset swaps or
+`sia-preregistration/3`), clinical-trial style: no post-hoc dataset swaps or
 delta shopping. The attestation carries the commitment it was checked
 against:
 
@@ -68,7 +85,8 @@ against:
 | `delta` | number | The non-inferiority margin declared pre-run. |
 | `metric` | string | Quality metric. `"expect_contains"`: expected substring anywhere in the response. `"expect_contains/digit-anchored"` (beacon): the expected `ANSWER=<n>` string must be the LAST non-empty line of the response — mentioning it mid-reasoning does not count. |
 | `repetitions` | integer | Trials per dataset item (R); an item passes only if all R trials pass. |
-| `replay_tolerance` | number | Pre-declared share of items an independent re-player may see answered differently (0–1). The served endpoint is not deterministic over time even at temperature 0 — measured element drift 1–4 of 90 per model between identical runs. Without this pre-registered disclosure an honest verifier looks like a forger, and real forgery hides inside the tolerance. Default 0.05. |
+| `replay_tolerance` | number | Pre-declared share of dataset items an independent re-player may see answered differently from the recorded run (0–1). The served endpoint is not deterministic over time even at temperature 0 — measured element drift 1–4 of 90 per model between identical runs. Without this pre-registered disclosure an honest verifier looks like a forger, and real forgery hides inside the tolerance. Default 0.05. |
+| `replay_tolerance_rule` | string | How the tolerance is accounted (`directional-one-sided:toward-claim` since `sia-preregistration/3`): divergences are counted separately by direction — those shifting the outcome **toward** the attested claim (new passes where the run recorded a failure, or old fails where it recorded a pass) and those shifting away — and the threshold applies to the one-sided toward-claim share. Honest drift is roughly symmetric; forgery pushes only one way, so a one-sided threshold rejects directional tampering about twice as hard at the same number while costing honest re-players nothing. |
 
 The ledger entry ordering (preregistration `seq` < receipt `seq`) and the
 commitment match are checkable via

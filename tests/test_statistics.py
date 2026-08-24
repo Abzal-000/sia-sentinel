@@ -106,13 +106,15 @@ class NonInferiorityTestCase(unittest.TestCase):
 
         result = non_inferiority_test(old, new, delta=0.10)
 
+        # alpha=(1-0.95)/2: вердикт читает нижнюю границу двустороннего
+        # CI, MDD обязан описывать тот же односторонний тест при 2.5%
         expected = minimum_detectable_difference(
-            100, alpha=0.05, power=0.80, p_discordant=0.30
+            100, alpha=0.025, power=0.80, p_discordant=0.30
         )
         self.assertAlmostEqual(result.mdd, expected, places=10)
 
         default_assumption = minimum_detectable_difference(
-            100, alpha=0.05, power=0.80, p_discordant=0.10
+            100, alpha=0.025, power=0.80, p_discordant=0.10
         )
         self.assertGreater(result.mdd, default_assumption)
 
@@ -125,7 +127,7 @@ class NonInferiorityTestCase(unittest.TestCase):
         result = non_inferiority_test(old, new, delta=0.10)
 
         expected = minimum_detectable_difference(
-            200, alpha=0.05, power=0.80, p_discordant=0.10
+            200, alpha=0.025, power=0.80, p_discordant=0.10
         )
         self.assertAlmostEqual(result.mdd, expected, places=10)
 
@@ -139,7 +141,7 @@ class NonInferiorityTestCase(unittest.TestCase):
         )
 
         expected = minimum_detectable_difference(
-            200, alpha=0.05, power=0.80, p_discordant=0.25
+            200, alpha=0.025, power=0.80, p_discordant=0.25
         )
         self.assertAlmostEqual(result.mdd, expected, places=10)
 
@@ -177,7 +179,7 @@ class NonInferiorityTestCase(unittest.TestCase):
 
         # CI проходит: -0.0218 > -0.05
         self.assertGreater(result.ci_lower, -result.delta)
-        self.assertFalse(result.non_inferior)      # но MDD = 0.0829 > 0.05
+        self.assertFalse(result.non_inferior)      # но MDD = 0.0934 > 0.05
         self.assertEqual(result.verdict, "inconclusive")
 
     def test_zero_discordance_exempt_from_mdd_gate(self) -> None:

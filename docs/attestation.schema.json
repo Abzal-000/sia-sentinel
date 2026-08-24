@@ -169,6 +169,12 @@
                 "number",
                 "null"
               ]
+            },
+            "declared_limits": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         },
@@ -211,6 +217,12 @@
               ],
               "exclusiveMinimum": 0,
               "maximum": 1
+            },
+            "replay_tolerance_rule": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         }

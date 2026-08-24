@@ -104,13 +104,13 @@ Interactive docs: `http://localhost:8000/docs`
 
 ```bash
 # Simulated LLM-flow audit (no API keys needed)
-python audit_cli.py audit --flow flows/example_llm_flow.json
+python audit_cli.py --flow flows/example_llm_flow.json
 
 # Live audit against NVIDIA NIM (set NVIDIA_API_KEY in .env, never inline)
-python audit_cli.py audit --flow flows/live_llm_flow.json
+python audit_cli.py --flow flows/live_llm_flow.json
 
 # Savings Autopilot: pick the cheapest config that still passes
-python audit_cli.py optimize --flow flows/live_optimize.json
+python audit_cli.py --flow flows/live_optimize.json
 ```
 
 ### Run an audit (Python SDK)

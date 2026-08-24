@@ -392,6 +392,11 @@ class SavingsOptimizer:
                     new_config=spec_to_endpoint(spec),
                     repetitions=goal.final_repetitions,
                     confidence=goal.confidence,
+                    # П.4: финалиста выбрал оптимизатор, а не пользователь.
+                    # Квитанция обязана это говорить: аудитор заверяет
+                    # собственный выбор — конфликт интересов публикуется,
+                    # а не прячется в пайплайне.
+                    candidate_selected_by="optimizer",
                 )
             except Exception as exc:
                 evaluations.append(

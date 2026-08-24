@@ -13,6 +13,7 @@
   "delta": 0.05,
   "confidence": 0.95,
   "repetitions": 1,
+  "replay_tolerance": 0.05,
   "dataset": [
     {
       "label": "gsm8k-e30f3eb5",
@@ -473,7 +474,10 @@
     "output_token_usd_per_m": 0.4,
     "temperature": 0.0,
     "prices_as_of": "2026-08-22",
-    "catalog_version": "nim-or-2026-08-22-r3"
+    "catalog_version": "nim-or-2026-08-22-r3",
+    "priced_model_name": "meta-llama/llama-3.1-70b-instruct",
+    "price_source_url": "https://openrouter.ai/api/v1/models",
+    "price_basis_note": "NVIDIA NIM serves the endpoint; token prices are OpenRouter list rates for meta-llama/llama-3.1-70b-instruct as of 2026-08-22 (source: https://openrouter.ai/api/v1/models). Same released weights, different serving — anyone can regenerate the list and re-derive the claim."
   },
   "new": {
     "model_name": "meta/llama-3.3-70b-instruct",
@@ -483,6 +487,9 @@
     "output_token_usd_per_m": 0.32,
     "temperature": 0.0,
     "prices_as_of": "2026-08-22",
-    "catalog_version": "nim-or-2026-08-22-r3"
+    "catalog_version": "nim-or-2026-08-22-r3",
+    "priced_model_name": "meta-llama/llama-3.3-70b-instruct",
+    "price_source_url": "https://openrouter.ai/api/v1/models",
+    "price_basis_note": "NVIDIA NIM serves the endpoint; token prices are OpenRouter list rates for meta-llama/llama-3.3-70b-instruct as of 2026-08-22 (source: https://openrouter.ai/api/v1/models). Same released weights, different serving — anyone can regenerate the list and re-derive the claim."
   }
 }

@@ -145,6 +145,12 @@ class SavingsOptimizerTestCase(unittest.TestCase):
         for report in result.final_audits.values():
             self.assertEqual(report.mode, "simulated")
             self.assertEqual(report.manifest["dataset_size"], len(DATASET))
+            # П.4: финалиста выбрал оптимизатор — квитанция обязана это
+            # говорить (конфликт интересов «аудитор заверяет свой выбор»
+            # публикуется, а не прячется)
+            self.assertEqual(
+                report.manifest["candidate_selected_by"], "optimizer"
+            )
 
     def test_failing_candidate_eliminated_at_screening(self) -> None:
         optimizer = SavingsOptimizer(client_factory=_factory_with_bad_model)

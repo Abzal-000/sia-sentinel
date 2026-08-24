@@ -93,11 +93,17 @@ class PreregistrationAPITestCase(unittest.TestCase):
         data = response.json()
         self.assertIn("preregistration_id", data)
         commitment = data["commitment"]
-        self.assertEqual(commitment["protocol"], "sia-preregistration/1")
+        self.assertEqual(commitment["protocol"], "sia-preregistration/3")
         self.assertEqual(commitment["delta"], 0.10)
         self.assertEqual(commitment["metric"], "expect_contains/digit-anchored")
         # Раскрытие допуска реплея: дефолт из измерения воспроизводимости
         self.assertEqual(commitment["replay_tolerance"], 0.05)
+        # Направленное правило учёта допуска (с /2): порог на односторонней
+        # доле «к заявлению»
+        self.assertEqual(
+            commitment["replay_tolerance_rule"],
+            "directional-one-sided:toward-claim",
+        )
         self.assertEqual(commitment["dataset_size"], 2)
         self.assertIn("dataset_sha256", commitment)
 
@@ -210,6 +216,25 @@ class PreregistrationAPITestCase(unittest.TestCase):
 
 class ReplayToleranceTestCase(unittest.TestCase):
     """Раскрытие допуска реплея: предрегистрировано до прогона."""
+
+    def test_commitment_carries_protocol_v2_and_directional_rule(self) -> None:
+        from sia.flow_runner import build_preregistration_commitment
+
+        flow = {
+            "kind": "llm_flow",
+            "dataset": [{"prompt": "2+2?", "expect_contains": "4"}],
+            "old": {"model_name": "old"},
+            "new": {"model_name": "new"},
+        }
+
+        commitment = build_preregistration_commitment(flow)
+
+        self.assertEqual(commitment["protocol"], "sia-preregistration/3")
+        self.assertEqual(commitment["replay_tolerance"], 0.05)
+        self.assertEqual(
+            commitment["replay_tolerance_rule"],
+            "directional-one-sided:toward-claim",
+        )
 
     def test_flow_key_overrides_default(self) -> None:
         from sia.flow_runner import build_preregistration_commitment

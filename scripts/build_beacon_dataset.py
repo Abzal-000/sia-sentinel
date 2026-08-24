@@ -89,6 +89,7 @@ from typing import Any, Optional
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
+from sia.llm_flow import DEFAULT_REPLAY_TOLERANCE  # noqa: E402
 from sia.statistics import minimum_detectable_difference  # noqa: E402
 
 SOURCE_URL = (
@@ -170,8 +171,23 @@ def _catalog_entry(catalog: dict[str, Any], model_name: str) -> dict[str, Any]:
 
 
 def _endpoint_block(
-    entry: dict[str, Any], catalog_version: Optional[str], prices_as_of: str
+    entry: dict[str, Any],
+    catalog_version: Optional[str],
+    prices_as_of: str,
+    price_source_url: Optional[str],
 ) -> dict[str, Any]:
+    priced_as = entry.get("priced_as")
+    price_note = None
+
+    if priced_as and price_source_url:
+        provider_label = "NVIDIA NIM" if entry.get("provider") == "nvidia-nim" else entry.get("provider", "the endpoint")
+        price_note = (
+            f"{provider_label} serves the endpoint; token prices are OpenRouter "
+            f"list rates for {priced_as} as of {prices_as_of} "
+            f"(source: {price_source_url}). Same released weights, different "
+            "serving — anyone can regenerate the list and re-derive the claim."
+        )
+
     return {
         "model_name": entry["model_name"],
         "base_url": entry["base_url"],
@@ -186,8 +202,14 @@ def _endpoint_block(
         # Провенанс цены: какой платный идентификатор OpenRouter дал число
         # и откуда список. Запись №1 неизменяема — без этих полей проверяющий
         # видит модель NVIDIA по ценам, которых NVIDIA не публикует.
-        "priced_model_name": entry.get("priced_as"),
-        "price_source_url": entry.get("_source"),
+        "priced_model_name": priced_as,
+        # _source живёт на КОРНЕ каталога, а не в записи модели; раньше это
+        # поле искали в entry и провенанс цены молча выпадал в null.
+        "price_source_url": price_source_url,
+        # Само раскрытие базы цены одной фразой — в квитанцию. Раньше
+        # оговорка «прогон на NIM, тарифы OpenRouter» жила только в _note
+        # каталога, которого подписанный артефакт не содержит.
+        "price_basis_note": price_note,
     }
 
 
@@ -195,26 +217,26 @@ def _short_name(model_name: str) -> str:
     return model_name.split("/")[-1].replace("-instruct", "").replace(":free", "")
 
 
-def _required_n(delta: float, start: int) -> int:
+def _required_n(delta: float, start: int, alpha: float) -> int:
     """Наименьшее n >= start, при котором MDD < delta."""
     n = max(start, 1)
 
     while minimum_detectable_difference(
-        n, p_discordant=P_DISCORDANT_ASSUMPTION
+        n, alpha=alpha, p_discordant=P_DISCORDANT_ASSUMPTION
     ) >= delta:
         n += 1
 
     return n
 
 
-def _max_discordance(delta: float, n: int) -> float:
+def _max_discordance(delta: float, n: int, alpha: float) -> float:
     """Дискордантность, до которой MDD при данном n остаётся ниже delta."""
     lo, hi = 0.0, 1.0
 
     for _ in range(60):
         mid = (lo + hi) / 2.0
 
-        if minimum_detectable_difference(n, p_discordant=mid) < delta:
+        if minimum_detectable_difference(n, alpha=alpha, p_discordant=mid) < delta:
             lo = mid
         else:
             hi = mid
@@ -243,6 +265,7 @@ def _build_flow(
     old_entry: dict[str, Any],
     new_entry: dict[str, Any],
     catalog_version: Optional[str],
+    price_source_url: Optional[str],
 ) -> dict[str, Any]:
     return {
         "kind": "llm_flow",
@@ -264,9 +287,19 @@ def _build_flow(
         "delta": args.delta,
         "confidence": args.confidence,
         "repetitions": args.repetitions,
+        # Допуск реплея ВПИСАН явно, а не унаследован молчаливым дефолтом:
+        # обязательство записи №1 замораживает объявленное решение. При
+        # направленном правиле (порог на односторонней доле «к заявлению»)
+        # то же число 0.05 к подлогу заметно строже, чем было скалярное —
+        # решение зафиксировано здесь, чтобы это читалось из флоу.
+        "replay_tolerance": args.replay_tolerance,
         "dataset": dataset,
-        "old": _endpoint_block(old_entry, catalog_version, args.prices_as_of),
-        "new": _endpoint_block(new_entry, catalog_version, args.prices_as_of),
+        "old": _endpoint_block(
+            old_entry, catalog_version, args.prices_as_of, price_source_url
+        ),
+        "new": _endpoint_block(
+            new_entry, catalog_version, args.prices_as_of, price_source_url
+        ),
     }
 
 
@@ -281,6 +314,16 @@ def main() -> int:
     parser.add_argument("--delta", type=float, default=0.05)
     parser.add_argument("--confidence", type=float, default=0.95)
     parser.add_argument("--repetitions", type=int, default=2)
+    parser.add_argument(
+        "--replay-tolerance",
+        type=float,
+        default=DEFAULT_REPLAY_TOLERANCE,
+        help="Допуск реплея, вписываемый во флоу ЯВНО (0-1). Направленное "
+        "правило считает расхождения по сторонам и применяет порог к "
+        "односторонней доле «к заявлению» — при том же числе это строже "
+        "к подлогу. Значение замораживается обязательством записи №1, "
+        "поэтому решение принимается здесь, а не дефолтом в коде.",
+    )
     parser.add_argument(
         "--probe-size",
         type=int,
@@ -341,12 +384,20 @@ def main() -> int:
         )
         return 4
 
+    # Тот же alpha, что в sia.statistics.non_inferiority_test: вердикт
+    # читает нижнюю границу двустороннего CI, то есть односторонний тест
+    # при (1-confidence)/2. Сборщик обязан советовать n и считать MDD по
+    # той же конвенции, по которой аудит потом опубликует число.
+    mdd_alpha = (1.0 - args.confidence) / 2.0
+
     mdd = minimum_detectable_difference(
-        args.count, alpha=1.0 - args.confidence, p_discordant=P_DISCORDANT_ASSUMPTION
+        args.count,
+        alpha=mdd_alpha,
+        p_discordant=P_DISCORDANT_ASSUMPTION,
     )
 
     if mdd >= args.delta and not args.allow_underpowered:
-        need = _required_n(args.delta, args.count)
+        need = _required_n(args.delta, args.count, mdd_alpha)
         print(
             f"FATAL: at n={args.count} the published MDD is {mdd * 100:.2f} pp, "
             f"which is not below delta={args.delta * 100:.2f} pp. Such an audit "
@@ -358,6 +409,9 @@ def main() -> int:
 
     catalog = json.loads(Path(args.catalog).read_text(encoding="utf-8"))
     catalog_version = catalog.get("catalog_version")
+    # _source — корневое поле каталога (откуда список цен); оно одно на
+    # все модели и попадает в провенанс каждого эндпоинта флоу.
+    price_source_url = catalog.get("_source")
     old_entry = _catalog_entry(catalog, args.old_model)
     new_entry = _catalog_entry(catalog, args.new_model)
     pair = f"{_short_name(args.old_model)}-vs-{_short_name(args.new_model)}"
@@ -371,6 +425,7 @@ def main() -> int:
         old_entry=old_entry,
         new_entry=new_entry,
         catalog_version=catalog_version,
+        price_source_url=price_source_url,
     )
 
     out_path = Path(args.out)
@@ -379,7 +434,7 @@ def main() -> int:
     )
 
     calls = args.count * max(1, args.repetitions) * 2
-    max_disc = _max_discordance(args.delta, args.count)
+    max_disc = _max_discordance(args.delta, args.count, mdd_alpha)
 
     print(f"source     : {source_path} ({line_count} items, sha256 verified)")
     print(f"survivors  : {len(survivors)} after filters")
@@ -407,6 +462,7 @@ def main() -> int:
             old_entry=old_entry,
             new_entry=new_entry,
             catalog_version=catalog_version,
+            price_source_url=price_source_url,
         )
         probe_path = Path(args.probe_out)
         probe_path.write_text(

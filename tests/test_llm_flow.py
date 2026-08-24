@@ -74,10 +74,51 @@ class LLMFlowAuditorTestCase(unittest.TestCase):
         self.assertEqual(as_dict["protocol"], "proof-of-savings-llm/1")
         self.assertIn("savings_usd_per_1k_calls", as_dict["claim"])
 
+    def test_serving_fingerprint_limits_and_provenance_published(self) -> None:
+        """П.3/4/5 рецензии: что реально отвечало, кто выбрал кандидата,
+        R и n как объявленные пределы рядом с MDD."""
+        old = LLMEndpointConfig(
+            model_name="premium-70b",
+            profile="verbose",
+            input_token_usd_per_m=3.0,
+            output_token_usd_per_m=15.0,
+        )
+        new = LLMEndpointConfig(
+            model_name="small-8b",
+            profile="concise",
+            input_token_usd_per_m=0.1,
+            output_token_usd_per_m=0.4,
+        )
+
+        report = self.auditor.audit_flow(DATASET, old, new, repetitions=2)
+        as_dict = report.to_dict()
+
+        # П.3: симулятор честно называет себя обслужившим бэкендом
+        self.assertEqual(
+            as_dict["usage_old"]["served_model_names"], ["premium-70b"]
+        )
+        served_new = as_dict["manifest"]["served_endpoints"]["new"]
+        self.assertEqual(served_new["model_names"], ["small-8b"])
+        self.assertEqual(served_new["system_fingerprints"], ["simulated"])
+        # Покрытие: все 4 вызова стороны new сообщили отпечаток (2 элемента
+        # × 2 повторения) — иначе список не доказывал бы постоянство бэкенда
+        self.assertEqual(
+            served_new["fingerprint_coverage"],
+            {"reported": 4, "total": 4},
+        )
+        self.assertEqual(as_dict["usage_old"]["system_fingerprint_calls"], 4)
+
+        # П.4: прямой аудит — кандидат объявлен пользователем во флоу
+        self.assertEqual(as_dict["manifest"]["candidate_selected_by"], "user")
+
+        # П.5: R и n публикуются рядом с MDD как пределы бюджета
+        limits = as_dict["equivalence"]["paired"]["declared_limits"]
+        self.assertIn("R=2", limits)
+        self.assertIn(f"n={len(DATASET)}", limits)
+
     def test_symmetric_call_accounting(self) -> None:
         old = LLMEndpointConfig(model_name="old", profile="standard")
         new = LLMEndpointConfig(model_name="new", profile="standard")
-
         report = self.auditor.audit_flow(DATASET, old, new, repetitions=3)
 
         self.assertEqual(report.usage_old.calls, len(DATASET) * 3)
@@ -381,6 +422,12 @@ class CheckpointResumeTestCase(unittest.TestCase):
         self.assertEqual(len(trials), 24)  # 12 элементов × 2 повторения
         keys = {(t["item"], t["rep"]) for t in trials}
         self.assertEqual(len(keys), 24)  # ни одного дубликата
+
+        # П.3: отпечатки обслужившего бэкенда едут в журнале — агрегат
+        # после возобновления покрывает весь прогон, включая вызовы до краша
+        self.assertEqual(res_usage.served_model_names, ("m",))
+        self.assertEqual(res_usage.system_fingerprints, ("simulated",))
+        self.assertEqual(res_usage.system_fingerprint_calls, 24)
 
     def test_legacy_protocol_v1_journal_refused(self) -> None:
         """Журналы пробы с префиксным чекером (/1) не доигрываются новым кодом:

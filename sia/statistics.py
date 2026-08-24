@@ -199,6 +199,11 @@ def minimum_detectable_difference(
     MDD ≈ (z_alpha + z_beta) * sqrt(p_disc / n), где p_disc — доля
     дискордантных пар (консервативно p_10 + p_01).
 
+    alpha здесь ОДНОСТОРОННИЙ (дефолт 0.05 — конвенция функции). Вызывающий
+    код обязан передавать alpha того решения, рядом с которым публикует
+    MDD: non_inferiority_test передаёт (1-confidence)/2, потому что вердикт
+    читает нижнюю границу двустороннего CI уровня confidence.
+
     Аудитор публикует это число: «при n=200 мы не заметили бы падение
     качества меньше X п.п.» — это делает вердикт честным.
     """
@@ -252,9 +257,15 @@ def non_inferiority_test(
     ci_lower, ci_upper = newcombe_paired_ci(b, c, n, confidence)
     mcnemar_p = mcnemar_exact(b, c)
     observed_discordant = ((b + c) / n) if n > 0 else 0.0
+    # Согласование alpha: вердикт принимает НИЖНЯЯ граница двустороннего
+    # CI уровня confidence — это односторонний тест при
+    # alpha=(1-confidence)/2 (z=1.96 при confidence=0.95). Раньше MDD
+    # считался при alpha=1-confidence (z=1.645): одно решение, два разных
+    # alpha, и опубликованная чувствительность описывала более слабый
+    # тест, чем тот, который её выносит.
     mdd = minimum_detectable_difference(
         n,
-        alpha=1.0 - confidence,
+        alpha=(1.0 - confidence) / 2.0,
         power=0.80,
         p_discordant=max(p_discordant_assumption, observed_discordant),
     )
