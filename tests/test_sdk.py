@@ -41,6 +41,7 @@ LLM_FLOW = {
     # Правило «нет якоря — нет записи»: без объявления пререгистрация
     # отказывает (sia-preregistration/4)
     "anchor_declaration": "external-anchor",
+    "anchor_reference": "rekor:00000000-0000-0000-0000-000000000000:1",
 }
 
 

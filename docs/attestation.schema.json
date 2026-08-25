@@ -229,6 +229,12 @@
                 "string",
                 "null"
               ]
+            },
+            "anchor_reference": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         }

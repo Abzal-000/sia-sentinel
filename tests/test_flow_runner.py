@@ -37,6 +37,7 @@ def _flow(n: int, **extra: object) -> dict:
         },
         "repetitions": 1,
         "anchor_declaration": "external-anchor",
+        "anchor_reference": "rekor:00000000-0000-0000-0000-000000000000:1",
         **extra,
     }
 

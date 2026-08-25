@@ -256,6 +256,25 @@ def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
             "ship unanchored because an operator never heard the rule."
         )
 
+    # external-anchor — положительное заявление, оно обязано быть
+    # проверяемым: идентификатор записи (Rekor 'rekor:<uuid>:<index>'
+    # либо дайджест CMS-токена RFC 3161 — 64 hex). unanchored — признание,
+    # ссылка ему не нужна.
+    anchor_reference = (flow.get("anchor_reference") or "").strip()
+
+    if anchor_declaration == "external-anchor":
+        import re as _re
+
+        if not _re.fullmatch(
+            r"rekor:[^:\s]+:\d+|[0-9a-f]{64}", anchor_reference or ""
+        ):
+            raise ValueError(
+                "anchor_declaration='external-anchor' requires a verifiable "
+                "'anchor_reference': 'rekor:<entry-uuid>:<log-index>' or the "
+                "64-hex digest of an RFC 3161 timestamp token. A bare claim "
+                "of anchoring is trust-shaped, not proof."
+            )
+
     dataset = flow.get("dataset") or []
     if not dataset:
         raise ValueError("preregistration requires a non-empty 'dataset'")
@@ -285,6 +304,7 @@ def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
         repetitions=repetitions,
         replay_tolerance=_replay_tolerance_from_flow(flow),
         anchor_declaration=anchor_declaration,
+        anchor_reference=anchor_reference or None,
     )
 
 

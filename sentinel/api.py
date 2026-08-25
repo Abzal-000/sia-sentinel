@@ -651,6 +651,10 @@ def _run_audit_and_register(
         # раскрытие вместе с обязательством (sia-preregistration/2)
         metadata["replay_tolerance"] = prereg.get("replay_tolerance")
         metadata["replay_tolerance_rule"] = prereg.get("replay_tolerance_rule")
+        # Статус якоря и его проверяемый идентификатор: читатель
+        # /v1/attestations/{id} обязан видеть и признание, и ссылку
+        metadata["anchor_declaration"] = prereg.get("anchor_declaration")
+        metadata["anchor_reference"] = prereg.get("anchor_reference")
 
     # A5: парная статистика (delta, mcnemar_p, MDD) публикуется в metadata,
     # чтобы аттестация несла методологию вердикта, а не только итог.
@@ -1620,6 +1624,8 @@ def _build_attestation(registry_id: str) -> dict[str, Any]:
             "metric": metadata.get("metric"),
             "replay_tolerance": metadata.get("replay_tolerance"),
             "replay_tolerance_rule": metadata.get("replay_tolerance_rule"),
+            "anchor_declaration": metadata.get("anchor_declaration"),
+            "anchor_reference": metadata.get("anchor_reference"),
         }
 
     # C3: issuer несёт тот ключ, которым подписана именно эта квитанция

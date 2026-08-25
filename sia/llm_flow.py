@@ -598,6 +598,7 @@ class LLMFlowAuditor:
         repetitions: int = 1,
         replay_tolerance: float = DEFAULT_REPLAY_TOLERANCE,
         anchor_declaration: Optional[str] = None,
+        anchor_reference: Optional[str] = None,
     ) -> dict[str, Any]:
         """Обязательство аудита, регистрируемое в цепочке ДО прогона.
 
@@ -640,6 +641,14 @@ class LLMFlowAuditor:
             # самом обязательстве.
             "anchor_declaration": (
                 anchor_declaration.strip() if anchor_declaration else None
+            ),
+            # Проверяемый идентификатор якоря при external-anchor: UUID+индекс
+            # записи Rekor или дайджест CMS-токена RFC 3161. Без него
+            # 'external-anchor' — слово вместо доказательства, тот же жанр,
+            # который проект отказывается принимать от других. Отсутствие
+            # у 'unanchored' — честное признание, проверять нечего.
+            "anchor_reference": (
+                anchor_reference.strip() if anchor_reference else None
             ),
             "endpoints": pricing,
         }

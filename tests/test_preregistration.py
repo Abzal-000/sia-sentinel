@@ -29,8 +29,9 @@ LLM_FLOW = {
     "delta": 0.10,
     "repetitions": 1,
     # Правило «нет якоря — нет записи» в коде: без явного объявления
-    # пререгистрация отказывает
+    # пререгистрация отказывает; external-anchor требует проверяемой ссылки
     "anchor_declaration": "external-anchor",
+    "anchor_reference": "rekor:00000000-0000-0000-0000-000000000000:1",
 }
 
 
@@ -109,6 +110,10 @@ class PreregistrationAPITestCase(unittest.TestCase):
         )
         # Явное признание статуса якоря замораживается в леджере
         self.assertEqual(commitment["anchor_declaration"], "external-anchor")
+        self.assertEqual(
+            commitment["anchor_reference"],
+            "rekor:00000000-0000-0000-0000-000000000000:1",
+        )
         self.assertEqual(commitment["dataset_size"], 2)
         self.assertIn("dataset_sha256", commitment)
 
@@ -124,6 +129,34 @@ class PreregistrationAPITestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("anchor_declaration", response.text)
+
+    def test_external_anchor_without_reference_refused(self) -> None:
+        """external-anchor без проверяемого идентификатора — слово, не proof."""
+        bare = {k: v for k, v in LLM_FLOW.items() if k != "anchor_reference"}
+
+        response = self.client.post(
+            "/v1/preregistrations", json={"flow": bare}, headers=self._auth_headers
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("anchor_reference", response.text)
+
+    def test_unanchored_needs_no_reference(self) -> None:
+        """Признание 'unanchored' — не претензия; ссылка ему не нужна."""
+        confession = dict(LLM_FLOW)
+        confession["anchor_declaration"] = "unanchored"
+        del confession["anchor_reference"]
+
+        response = self.client.post(
+            "/v1/preregistrations",
+            json={"flow": confession},
+            headers=self._auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        commitment = response.json()["commitment"]
+        self.assertEqual(commitment["anchor_declaration"], "unanchored")
+        self.assertIsNone(commitment["anchor_reference"])
 
     def test_preregistration_requires_auth(self) -> None:
         response = self.client.post("/v1/preregistrations", json={"flow": LLM_FLOW})
@@ -283,6 +316,7 @@ class ReplayToleranceTestCase(unittest.TestCase):
             "new": {"model_name": "new"},
             "replay_tolerance": 0.08,
             "anchor_declaration": "external-anchor",
+            "anchor_reference": "rekor:00000000-0000-0000-0000-000000000000:1",
         }
 
         commitment = build_preregistration_commitment(flow)
