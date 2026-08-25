@@ -36,6 +36,7 @@ def _flow(n: int, **extra: object) -> dict:
             "catalog_version": "2026.08",
         },
         "repetitions": 1,
+        "anchor_declaration": "external-anchor",
         **extra,
     }
 

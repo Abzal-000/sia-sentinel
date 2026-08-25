@@ -223,6 +223,12 @@
                 "string",
                 "null"
               ]
+            },
+            "anchor_declaration": {
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         }

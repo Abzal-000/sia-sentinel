@@ -38,6 +38,9 @@ LLM_FLOW = {
     "new": {"model_name": "small", "profile": "concise",
             "input_token_usd_per_m": 0.1, "output_token_usd_per_m": 0.4},
     "repetitions": 1,
+    # Правило «нет якоря — нет записи»: без объявления пререгистрация
+    # отказывает (sia-preregistration/4)
+    "anchor_declaration": "external-anchor",
 }
 
 

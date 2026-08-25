@@ -28,6 +28,9 @@ LLM_FLOW = {
             "input_token_usd_per_m": 0.1, "output_token_usd_per_m": 0.4},
     "delta": 0.10,
     "repetitions": 1,
+    # Правило «нет якоря — нет записи» в коде: без явного объявления
+    # пререгистрация отказывает
+    "anchor_declaration": "external-anchor",
 }
 
 
@@ -93,7 +96,7 @@ class PreregistrationAPITestCase(unittest.TestCase):
         data = response.json()
         self.assertIn("preregistration_id", data)
         commitment = data["commitment"]
-        self.assertEqual(commitment["protocol"], "sia-preregistration/3")
+        self.assertEqual(commitment["protocol"], "sia-preregistration/4")
         self.assertEqual(commitment["delta"], 0.10)
         self.assertEqual(commitment["metric"], "expect_contains/digit-anchored")
         # Раскрытие допуска реплея: дефолт из измерения воспроизводимости
@@ -104,8 +107,23 @@ class PreregistrationAPITestCase(unittest.TestCase):
             commitment["replay_tolerance_rule"],
             "directional-one-sided:toward-claim",
         )
+        # Явное признание статуса якоря замораживается в леджере
+        self.assertEqual(commitment["anchor_declaration"], "external-anchor")
         self.assertEqual(commitment["dataset_size"], 2)
         self.assertIn("dataset_sha256", commitment)
+
+    def test_preregistration_without_anchor_declaration_refused(self) -> None:
+        """Правило в коде, не в памяти: молча пройти без объявления нельзя."""
+        flow_without_anchor = {k: v for k, v in LLM_FLOW.items() if k != "anchor_declaration"}
+
+        response = self.client.post(
+            "/v1/preregistrations",
+            json={"flow": flow_without_anchor},
+            headers=self._auth_headers,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("anchor_declaration", response.text)
 
     def test_preregistration_requires_auth(self) -> None:
         response = self.client.post("/v1/preregistrations", json={"flow": LLM_FLOW})
@@ -225,16 +243,35 @@ class ReplayToleranceTestCase(unittest.TestCase):
             "dataset": [{"prompt": "2+2?", "expect_contains": "4"}],
             "old": {"model_name": "old"},
             "new": {"model_name": "new"},
+            "anchor_declaration": "unanchored",
         }
 
         commitment = build_preregistration_commitment(flow)
 
-        self.assertEqual(commitment["protocol"], "sia-preregistration/3")
+        self.assertEqual(commitment["protocol"], "sia-preregistration/4")
         self.assertEqual(commitment["replay_tolerance"], 0.05)
         self.assertEqual(
             commitment["replay_tolerance_rule"],
             "directional-one-sided:toward-claim",
         )
+        # Прямой вызов с объявлением несёт его в обязательстве; отказ без
+        # объявления проверяет соседний тест
+        self.assertEqual(commitment["anchor_declaration"], "unanchored")
+
+    def test_flow_without_anchor_declaration_refused(self) -> None:
+        from sia.flow_runner import build_preregistration_commitment
+
+        flow = {
+            "kind": "llm_flow",
+            "dataset": [{"prompt": "2+2?", "expect_contains": "4"}],
+            "old": {"model_name": "old"},
+            "new": {"model_name": "new"},
+        }
+
+        with self.assertRaises(ValueError) as ctx:
+            build_preregistration_commitment(flow)
+
+        self.assertIn("anchor_declaration", str(ctx.exception))
 
     def test_flow_key_overrides_default(self) -> None:
         from sia.flow_runner import build_preregistration_commitment
@@ -245,6 +282,7 @@ class ReplayToleranceTestCase(unittest.TestCase):
             "old": {"model_name": "old"},
             "new": {"model_name": "new"},
             "replay_tolerance": 0.08,
+            "anchor_declaration": "external-anchor",
         }
 
         commitment = build_preregistration_commitment(flow)

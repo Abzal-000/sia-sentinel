@@ -234,11 +234,27 @@ def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
     Поддерживает kind=llm_flow и kind=optimize (у optimize — датасет и
     базовая конфигурация). Для kind=code предрегистрация не применяется
     (code-аудиты идут только через CLI с доверенным локальным вводом).
+
+    ПРАВИЛО «НЕТ ЯКОРЯ — НЕТ ЗАПИСИ» В КОДЕ, НЕ В ПАМЯТИ: флоу обязан нести
+    явное anchor_declaration ('external-anchor' или 'unanchored') — без него
+    регистрация отказывает. Молчаливое прохождение оператором, который не
+    знает о договорённостях этого разговора, исключено; признание
+    замораживается в леджере рядом с остальными параметрами.
     """
     kind = flow.get("kind")
 
     if kind not in ("llm_flow", "optimize"):
         raise ValueError(f"preregistration is not supported for kind={kind!r}")
+
+    anchor_declaration = (flow.get("anchor_declaration") or "").strip()
+
+    if not anchor_declaration:
+        raise ValueError(
+            "flow must carry an explicit 'anchor_declaration' before "
+            "preregistration ('external-anchor' or 'unanchored'). Anchoring "
+            "is not optional by default; a silent pass would let record №7 "
+            "ship unanchored because an operator never heard the rule."
+        )
 
     dataset = flow.get("dataset") or []
     if not dataset:
@@ -268,6 +284,7 @@ def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
         confidence=confidence,
         repetitions=repetitions,
         replay_tolerance=_replay_tolerance_from_flow(flow),
+        anchor_declaration=anchor_declaration,
     )
 
 

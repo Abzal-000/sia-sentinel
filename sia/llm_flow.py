@@ -466,10 +466,12 @@ class FlowUsage:
     # отсортированы для детерминизма отчёта
     served_model_names: tuple[str, ...] = ()
     system_fingerprints: tuple[str, ...] = ()
-    # Сколько вызовов сообщили system_fingerprint из общего числа calls:
-    # «одно значение в множестве» без покрытия не доказывает, что весь
-    # прогон обслужив один бэкенд — прогон с 3 ответившими из 450 публикует
-    # тот же список, что прогон со всеми 450. Покрытие идёт в манифест.
+    # Покрытие по КАЖДОМУ из доказательств: NIM чаще всего НЕ отдаёт
+    # system_fingerprint (публикуется честный 0/n), и тогда единственным
+    # свидетельством постоянства бэкенда остаётся model_names — у которого
+    # счётчика не было, и прогон «3 имени из 450» был бы неотличим от
+    # «450 из 450». total для обоих — usage.calls.
+    served_model_name_calls: int = 0
     system_fingerprint_calls: int = 0
 
     @property
@@ -490,6 +492,7 @@ class FlowUsage:
             "unit_cost_usd": round(self.unit_cost_usd, 8),
             "served_model_names": list(self.served_model_names),
             "system_fingerprints": list(self.system_fingerprints),
+            "served_model_name_calls": self.served_model_name_calls,
             "system_fingerprint_calls": self.system_fingerprint_calls,
         }
 
@@ -577,12 +580,13 @@ class LLMFlowAuditor:
         )
         return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
-    # /3: в эндпоинты обязательства добавлено price_basis_note — форма
-    # обязательства снова изменилась. Бамп структурный, по тому же правилу,
-    # что у журнала ниже: заголовки/сравнения не хешируют словарь
-    # обязательств целиком, а /2 был отчеканен и аннулирован в один день до
-    # записи №1 — валидных обязательств /2 не существует.
-    PREREGISTRATION_PROTOCOL = "sia-preregistration/3"
+    # /4: в обязательстве появился anchor_declaration — явное признание
+    # статуса внешнего анкоринга. Правило «нет якоря — нет записи» обязано
+    # жить в коде, а не в памяти операторов: POST /v1/preregistrations
+    # отказывает без объявления, а его значение замораживается в леджере —
+    # запись №7 от оператора, не участовавшего в этом разговоре, не сможет
+    # пройти молча. /3 был отчеканен и аннулирован в один день до записи №1.
+    PREREGISTRATION_PROTOCOL = "sia-preregistration/4"
 
     @staticmethod
     def preregistration_commitment(
@@ -593,6 +597,7 @@ class LLMFlowAuditor:
         confidence: float = 0.95,
         repetitions: int = 1,
         replay_tolerance: float = DEFAULT_REPLAY_TOLERANCE,
+        anchor_declaration: Optional[str] = None,
     ) -> dict[str, Any]:
         """Обязательство аудита, регистрируемое в цепочке ДО прогона.
 
@@ -628,6 +633,14 @@ class LLMFlowAuditor:
             # Направленное правило учёта допуска: порог — на односторонней
             # доле «к заявлению», а не на суммарной (см. константу выше).
             "replay_tolerance_rule": REPLAY_TOLERANCE_RULE,
+            # Статус внешнего анкоринга, объявленный ОПЕРАТОРОМ при
+            # регистрации (например 'external-anchor' или 'unanchored').
+            # API пререгистрации отказывает без явного значения; None сюда
+            # попадает только с прямого вызова/пути аудита — и это видно в
+            # самом обязательстве.
+            "anchor_declaration": (
+                anchor_declaration.strip() if anchor_declaration else None
+            ),
             "endpoints": pricing,
         }
 
@@ -661,6 +674,7 @@ class LLMFlowAuditor:
         served_models: set[str] = set()
         served_fingerprints: set[str] = set()
         fingerprint_calls = 0
+        model_name_calls = 0
 
         journal = None
 
@@ -691,6 +705,7 @@ class LLMFlowAuditor:
                     ok = bool(recorded["ok"])
                     if recorded.get("smodel"):
                         served_models.add(recorded["smodel"])
+                        model_name_calls += 1
                     if recorded.get("sfp") is not None:
                         served_fingerprints.add(recorded["sfp"])
                         fingerprint_calls += 1
@@ -706,6 +721,7 @@ class LLMFlowAuditor:
                     ok = _expect_met(expect, result.text)
                     if result.served_model_name:
                         served_models.add(result.served_model_name)
+                        model_name_calls += 1
                     if result.system_fingerprint is not None:
                         served_fingerprints.add(result.system_fingerprint)
                         fingerprint_calls += 1
@@ -742,6 +758,7 @@ class LLMFlowAuditor:
             total_cost_usd=total_usd,
             served_model_names=tuple(sorted(served_models)),
             system_fingerprints=tuple(sorted(served_fingerprints)),
+            served_model_name_calls=model_name_calls,
             system_fingerprint_calls=fingerprint_calls,
         )
 
@@ -892,6 +909,10 @@ class LLMFlowAuditor:
                 "old": {
                     "model_names": list(usage_old.served_model_names),
                     "system_fingerprints": list(usage_old.system_fingerprints),
+                    "model_name_coverage": {
+                        "reported": usage_old.served_model_name_calls,
+                        "total": usage_old.calls,
+                    },
                     "fingerprint_coverage": {
                         "reported": usage_old.system_fingerprint_calls,
                         "total": usage_old.calls,
@@ -900,6 +921,10 @@ class LLMFlowAuditor:
                 "new": {
                     "model_names": list(usage_new.served_model_names),
                     "system_fingerprints": list(usage_new.system_fingerprints),
+                    "model_name_coverage": {
+                        "reported": usage_new.served_model_name_calls,
+                        "total": usage_new.calls,
+                    },
                     "fingerprint_coverage": {
                         "reported": usage_new.system_fingerprint_calls,
                         "total": usage_new.calls,

@@ -75,7 +75,7 @@ candidate answers that objection without hiding it in the pipeline.
 
 For `llm_flow`/`optimize` flows the audit parameters are committed to the
 ledger **before** the run (`POST /v1/preregistrations`, protocol
-`sia-preregistration/3`), clinical-trial style: no post-hoc dataset swaps or
+`sia-preregistration/4`), clinical-trial style: no post-hoc dataset swaps or
 delta shopping. The attestation carries the commitment it was checked
 against:
 
@@ -87,6 +87,7 @@ against:
 | `repetitions` | integer | Trials per dataset item (R); an item passes only if all R trials pass. |
 | `replay_tolerance` | number | Pre-declared share of dataset items an independent re-player may see answered differently from the recorded run (0–1). The served endpoint is not deterministic over time even at temperature 0 — measured element drift 1–4 of 90 per model between identical runs. Without this pre-registered disclosure an honest verifier looks like a forger, and real forgery hides inside the tolerance. Default 0.05. |
 | `replay_tolerance_rule` | string | How the tolerance is accounted (`directional-one-sided:toward-claim` since `sia-preregistration/3`): divergences are counted separately by direction — those shifting the outcome **toward** the attested claim (new passes where the run recorded a failure, or old fails where it recorded a pass) and those shifting away — and the threshold applies to the one-sided toward-claim share. Honest drift is roughly symmetric; forgery pushes only one way, so a one-sided threshold rejects directional tampering about twice as hard at the same number while costing honest re-players nothing. |
+| `anchor_declaration` | string \| null | The operator's explicit statement of external-anchoring status made **at registration time** (`external-anchor`, `unanchored`, …). Preregistration **refuses** to run without it: "no anchor — no record" lives in code, not in an operator's memory, so an unanchored entry can only exist by conscious, permanently visible declaration. |
 
 The ledger entry ordering (preregistration `seq` < receipt `seq`) and the
 commitment match are checkable via

@@ -100,13 +100,19 @@ class LLMFlowAuditorTestCase(unittest.TestCase):
         served_new = as_dict["manifest"]["served_endpoints"]["new"]
         self.assertEqual(served_new["model_names"], ["small-8b"])
         self.assertEqual(served_new["system_fingerprints"], ["simulated"])
-        # Покрытие: все 4 вызова стороны new сообщили отпечаток (2 элемента
-        # × 2 повторения) — иначе список не доказывал бы постоянство бэкенда
+        # Покрытие по обоим доказательствам, все 4 вызова (2 элемента
+        # × 2 повторения) сообщили и имя, и отпечаток
+        served_old = as_dict["manifest"]["served_endpoints"]["old"]
         self.assertEqual(
             served_new["fingerprint_coverage"],
             {"reported": 4, "total": 4},
         )
+        self.assertEqual(
+            served_old["model_name_coverage"],
+            {"reported": 4, "total": 4},
+        )
         self.assertEqual(as_dict["usage_old"]["system_fingerprint_calls"], 4)
+        self.assertEqual(as_dict["usage_old"]["served_model_name_calls"], 4)
 
         # П.4: прямой аудит — кандидат объявлен пользователем во флоу
         self.assertEqual(as_dict["manifest"]["candidate_selected_by"], "user")
