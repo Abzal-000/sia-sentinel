@@ -2295,5 +2295,39 @@
     "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.075/0.30 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
   },
   "anchor_declaration": "external-anchor",
-  "anchor_reference": "rekor:0000000000000000000000000000000000000000000000000000000000000000:0"
+  "anchor_reference": "rekor:108e9186e8c5677ab7e31e044477eee82274d4dfe6a099a0ea71483e3de70b79e5344934441f00c8:2601942504",
+  "gate_evidence": {
+    "checked_at": "2026-08-26T12:15:30.520199+00:00",
+    "sides": {
+      "old": {
+        "model_name": "openai/gpt-oss-120b",
+        "alive": true,
+        "latency_sec": 1.43,
+        "out_tokens": 22,
+        "answer_tail": "ANSWER=391",
+        "served_model_name": "openai/gpt-oss-120b",
+        "list_rate_matches_flow": true,
+        "list_rate": {
+          "input": 0.15,
+          "output": 0.6,
+          "provider": "Groq | openai/gpt-oss-120b"
+        }
+      },
+      "new": {
+        "model_name": "openai/gpt-oss-20b",
+        "alive": true,
+        "latency_sec": 0.54,
+        "out_tokens": 21,
+        "answer_tail": "ANSWER=391",
+        "served_model_name": "openai/gpt-oss-20b",
+        "list_rate_matches_flow": true,
+        "list_rate": {
+          "input": 0.075,
+          "output": 0.3,
+          "provider": "Groq | openai/gpt-oss-20b"
+        }
+      }
+    },
+    "prices_checked_at": "2026-08-26T12:15:30.520199+00:00"
+  }
 }
