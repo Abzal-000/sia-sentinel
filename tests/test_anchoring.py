@@ -48,9 +48,15 @@ class _FakeHttpxResponse:
 class _FakeHttpxModule:
     """Заменяет httpx внутри HttpAnchorTransport.publish."""
 
-    def __init__(self, status_code: int = 200, json_payload: dict | None = None):
+    def __init__(
+        self,
+        status_code: int = 200,
+        json_payload: dict | None = None,
+        response_headers: dict | None = None,
+    ):
         self.status_code = status_code
         self._json_payload = json_payload
+        self._response_headers = response_headers or {}
         self.calls: list[dict] = []
         self.gets: list[dict] = []
         # Ответ GET по умолчанию: та же полезная нагрузка, что и у POST
@@ -61,7 +67,9 @@ class _FakeHttpxModule:
             {"url": url, "content": content, "headers": headers,
              "timeout": timeout, "json": json}
         )
-        return _FakeHttpxResponse(self.status_code, self._json_payload)
+        return _FakeHttpxResponse(
+            self.status_code, self._json_payload, self._response_headers
+        )
 
     def get(self, url, params=None, headers=None, timeout=None):
         self.gets.append({"url": url, "params": params})
@@ -435,9 +443,14 @@ class RekorAnchorTransportTestCase(unittest.TestCase):
         self.assertIn(b"BEGIN PUBLIC KEY", pem)
 
     def test_conflict_recovers_index_and_reference(self) -> None:
-        """Ожидаемый путь повтора: 409 -> GET по entryUUID -> готовая
-        строка anchor_reference, а не ok без данных для вставки."""
-        fake = _FakeHttpxModule(status_code=409, json_payload={"rk-dup": {}})
+        """Ожидаемый путь повтора: 409 c Location -> GET по entryUUID ->
+        готовая строка anchor_reference, а не ok без данных для вставки."""
+        uuid64 = "c" * 64
+        fake = _FakeHttpxModule(
+            status_code=409,
+            json_payload={"code": 409, "message": "entry already exists"},
+            response_headers={"Location": f"/api/v1/log/entries/{uuid64}"},
+        )
         self._inject_fake_httpx(fake)
 
         result = RekorAnchorTransport(signer=self._TestSigner()).publish(
@@ -445,10 +458,50 @@ class RekorAnchorTransportTestCase(unittest.TestCase):
         )
 
         self.assertTrue(result["ok"])
-        self.assertEqual(result["rekor_uuid"], "rk-dup")
+        self.assertEqual(result["rekor_uuid"], uuid64)
         self.assertEqual(result["rekor_index"], 9)
-        self.assertEqual(result["anchor_reference"], "rekor:rk-dup:9")
-        self.assertEqual(fake.gets[0]["params"], {"entryUUID": "rk-dup"})
+        self.assertEqual(result["anchor_reference"], f"rekor:{uuid64}:9")
+        self.assertEqual(fake.gets[0]["params"], {"entryUUID": uuid64})
+
+    def test_conflict_error_body_recovers_id_from_message(self) -> None:
+        """Тело 409 у Rekor — {code,message}: первый ключ НЕ UUID.
+        Раньше next(iter(payload)) отдавал 'code', и путь повтора был
+        тупиком; теперь идентификатор ищется по форме внутри текста."""
+        error_body = {
+            "code": 409,
+            "message": (
+                "entry already exists: "
+                f"{'e' * 80}"
+            ),
+        }
+        fake = _FakeHttpxModule(status_code=409, json_payload=error_body)
+        self._inject_fake_httpx(fake)
+
+        result = RekorAnchorTransport(signer=self._TestSigner()).publish(
+            self._checkpoint()
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["rekor_uuid"], "e" * 80)
+        self.assertEqual(result["anchor_reference"], f"rekor:{'e' * 80}:9")
+
+    def test_conflict_without_recoverable_id_is_honest(self) -> None:
+        """Не нашли форму нигде — ok=True, но честно 'reference unavailable',
+        без выдуманного идентификатора из первого ключа ошибки."""
+        fake = _FakeHttpxModule(
+            status_code=409,
+            json_payload={"code": 409, "message": "duplicate entry"},
+        )
+        fake.get_status_code = 500
+        self._inject_fake_httpx(fake)
+
+        result = RekorAnchorTransport(signer=self._TestSigner()).publish(
+            self._checkpoint()
+        )
+
+        self.assertTrue(result["ok"])
+        self.assertIn("reference unavailable", result["detail"])
+        self.assertNotIn("anchor_reference", result)
 
     def test_signing_failure_reported_before_http(self) -> None:
         fake = _FakeHttpxModule(status_code=201)

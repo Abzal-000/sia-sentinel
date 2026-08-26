@@ -331,15 +331,34 @@ class RekorAnchorTransport:
 
     @staticmethod
     def _uuid_from_conflict(response: Any) -> Optional[str]:
-        """Достаёт UUID существующей записи из 409 (Location или тело)."""
+        """Достаёт UUID существующей записи из 409.
+
+        Тело 409 у Rekor — объект ошибки {code,message}: ПЕРВЫЙ ключ не
+        UUID (раньше next(iter(payload)) отдавал 'code', и ожидаемый путь
+        повтора снова становился тупиком). Идентификатор обязан совпасть
+        с формой инстанса (64 или 80 hex); при промахе в Location ищем
+        эту форму внутри тела/сообщения; не нашли — честно None,
+        наверху будет 'reference unavailable'.
+        """
+        import re as _re
+
+        # 80 ПЕРВЫМ: search находит левое совпадение — при обратном порядке
+        # 80-hex ID срезался бы до первых 64 символов
+        shape = _re.compile(r"[0-9a-f]{80}|[0-9a-f]{64}")
+
         location = ""
-        headers = getattr(response, "headers", None) or {}
-        location = headers.get("Location") or "" if hasattr(headers, "get") else ""
+        headers = getattr(response, "headers", None)
+
+        if headers is not None:
+            try:
+                location = headers.get("Location") or ""
+            except Exception:
+                location = ""
 
         if location:
             tail = location.rstrip("/").rsplit("/", 1)[-1]
 
-            if tail:
+            if tail and shape.fullmatch(tail):
                 return tail
 
         try:
@@ -347,7 +366,17 @@ class RekorAnchorTransport:
         except Exception:
             return None
 
-        return next(iter(payload), None) if isinstance(payload, dict) else None
+        parts: list[str] = []
+
+        if isinstance(payload, dict):
+            for value in payload.values():
+                parts.append(str(value))
+
+            parts.append(str(payload.get("message", "")))
+
+        found = shape.search(" ".join(parts))
+
+        return found.group(0) if found else None
 
 
 class _ReceiptKeySigner:

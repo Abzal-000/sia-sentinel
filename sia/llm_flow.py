@@ -880,7 +880,10 @@ class LLMFlowAuditor:
         equivalence["paired"]["declared_limits"] = (
             f"R={repetitions} repetitions per item over n={dataset_size} "
             "items, both fixed at preregistration; the MDD is what this "
-            "budget can detect (80% power), not a quality statement."
+            "budget can detect (80% power), not a quality statement. With "
+            "R=1, per-element flakiness cannot be separated from item "
+            "difficulty, so the directional replay verifier will have no "
+            "within-element consistency to check."
         )
 
         mode = "simulated" if isinstance(new_client, SimulatedLLMClient) else "live"
