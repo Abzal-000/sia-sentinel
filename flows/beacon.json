@@ -1,6 +1,6 @@
 {
   "kind": "llm_flow",
-  "name": "beacon-gsm8k450-nemotron-3-ultra-550b-a55b-vs-nemotron-3-super-120b-a12b",
+  "name": "beacon-gsm8k450-groq-gpt-oss-120b-vs-gpt-oss-20b",
   "_provenance": {
     "source": "GSM8K test split (grade-school-math, MIT)",
     "source_url": "https://raw.githubusercontent.com/openai/grade-school-math/master/grade_school_math/data/test.jsonl",
@@ -13,6 +13,7 @@
   "delta": 0.05,
   "confidence": 0.95,
   "repetitions": 1,
+  "replay_tolerance": 0.05,
   "dataset": [
     {
       "label": "gsm8k-003c5304",
@@ -2266,23 +2267,31 @@
     }
   ],
   "old": {
-    "model_name": "nvidia/nemotron-3-ultra-550b-a55b:free",
-    "base_url": "https://openrouter.ai/api/v1",
-    "api_key_env": "OPENROUTER_API_KEY",
-    "input_token_usd_per_m": 0.6,
-    "output_token_usd_per_m": 3.6,
+    "model_name": "openai/gpt-oss-120b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "api_key_env": "GROQ_API_KEY",
+    "input_token_usd_per_m": 0.15,
+    "output_token_usd_per_m": 0.6,
     "temperature": 0.0,
-    "prices_as_of": "2026-08-22",
-    "catalog_version": "or-2026-08-22"
+    "reasoning_effort": "low",
+    "prices_as_of": "2026-08-26",
+    "catalog_version": "groq-2026-08-26-r1",
+    "priced_model_name": "openai/gpt-oss-120b",
+    "price_source_url": "https://openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints",
+    "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.15/0.60 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
   },
   "new": {
-    "model_name": "nvidia/nemotron-3-super-120b-a12b:free",
-    "base_url": "https://openrouter.ai/api/v1",
-    "api_key_env": "OPENROUTER_API_KEY",
-    "input_token_usd_per_m": 0.085,
-    "output_token_usd_per_m": 0.4,
+    "model_name": "openai/gpt-oss-20b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "api_key_env": "GROQ_API_KEY",
+    "input_token_usd_per_m": 0.075,
+    "output_token_usd_per_m": 0.3,
     "temperature": 0.0,
-    "prices_as_of": "2026-08-22",
-    "catalog_version": "or-2026-08-22"
+    "reasoning_effort": "low",
+    "prices_as_of": "2026-08-26",
+    "catalog_version": "groq-2026-08-26-r1",
+    "priced_model_name": "openai/gpt-oss-20b",
+    "price_source_url": "https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints",
+    "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.075/0.30 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
   }
 }

@@ -392,6 +392,7 @@ def _endpoint_from_block(block: dict[str, Any]) -> LLMEndpointConfig:
         base_url=block.get("base_url"),
         api_key=api_key,
         temperature=block.get("temperature", 0.0),
+        reasoning_effort=block.get("reasoning_effort"),
         profile=block.get("profile", "standard"),
         seed=block.get("seed", 42),
         prices_as_of=block.get("prices_as_of"),

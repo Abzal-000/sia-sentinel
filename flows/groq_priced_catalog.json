@@ -1,0 +1,38 @@
+{
+  "_note": "Manual curation 2026-08-26 (Groq free developer tier, same key): both endpoints live-checked with one completion call each before catalog creation — liveness gate per repo rule ('a dated catalog does not mean liveness'). Prices are Groq's OWN published list rates for the SAME endpoint that serves the free tier, taken from OpenRouter's public models API (priced_as identifiers below); unlike the previous cross-provider basis (NIM served, OpenRouter priced) there is no quantization or routing gap. Actual spend on any run is zero: this is a counterfactual list-price computation, not an invoice. CAVEAT: regeneration via scripts/fetch_openrouter_prices.py re-adds dead-but-priced entries; re-run the liveness gate before relying on this file.",
+  "_source": "https://openrouter.ai/api/v1/models",
+  "prices_as_of": "2026-08-26",
+  "catalog_version": "groq-2026-08-26-r1",
+  "models": [
+    {
+      "model_name": "openai/gpt-oss-120b",
+      "provider": "groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "input_token_usd_per_m": 0.15,
+      "output_token_usd_per_m": 0.6,
+      "tier": "premium",
+      "context_window": 131072,
+      "tags": [
+        "chat",
+        "reasoning"
+      ],
+      "priced_as": "openai/gpt-oss-120b"
+    },
+    {
+      "model_name": "openai/gpt-oss-20b",
+      "provider": "groq",
+      "base_url": "https://api.groq.com/openai/v1",
+      "api_key_env": "GROQ_API_KEY",
+      "input_token_usd_per_m": 0.075,
+      "output_token_usd_per_m": 0.3,
+      "tier": "mid",
+      "context_window": 131072,
+      "tags": [
+        "chat",
+        "reasoning"
+      ],
+      "priced_as": "openai/gpt-oss-20b"
+    }
+  ]
+}

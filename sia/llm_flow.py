@@ -233,6 +233,10 @@ class LLMEndpointConfig:
     base_url: Optional[str] = None
     api_key: Optional[str] = None
     temperature: float = 0.0
+    # Объём рассуждения (gpt-oss на Groq): влияет и на вердикт, и на
+    # расход токенов, поэтому обязан быть задекларирован ДО прогона —
+    # попадает в public_dict() и дальше в обязательство.
+    reasoning_effort: Optional[str] = None
     # Профиль детерминированного ответчика: verbose / standard / concise
     profile: str = "standard"
     seed: int = 42
@@ -278,6 +282,7 @@ class LLMEndpointConfig:
             "output_token_usd_per_m": self.output_token_usd_per_m,
             "base_url": self.base_url,
             "temperature": self.temperature,
+            "reasoning_effort": self.reasoning_effort,
             "profile": self.profile,
             "seed": self.seed,
             "simulated_reliability": self.simulated_reliability,
@@ -433,10 +438,18 @@ class OpenAICompatibleClient:
     def complete(self, prompt: str, expect: Optional[str] = None) -> CompletionResult:
         started = time.perf_counter()
 
+        # Заявленные параметры запроса — дословно, без системных обёрток:
+        # всё, что влияет на вердикт, обязано быть видно в конфиге.
+        extra: dict[str, Any] = (
+            {"reasoning_effort": self.config.reasoning_effort}
+            if self.config.reasoning_effort
+            else {}
+        )
         response = self._client.chat.completions.create(
             model=self.config.model_name,
             messages=[{"role": "user", "content": prompt}],
             temperature=self.config.temperature,
+            **extra,
         )
 
         latency_sec = time.perf_counter() - started
