@@ -66,6 +66,17 @@ class DatasetLimitTestCase(unittest.TestCase):
         self.assertEqual(report["manifest"]["dataset_size"], 300)
         self.assertEqual(report["mode"], "simulated")
 
+    def test_gate_evidence_lands_in_manifest(self) -> None:
+        """Ворота живости/цен из того же сеанса публикуются под подписью:
+        время ворот живёт в манифесте записи, а не в болтовне сессии."""
+        evidence = {"checked_at": "2026-08-26T10:56:25+00:00", "sides": {}}
+        report = run_flow_audit(_flow(2, gate_evidence=evidence))
+
+        self.assertEqual(
+            report["manifest"]["gate_evidence"]["checked_at"],
+            "2026-08-26T10:56:25+00:00",
+        )
+
     def test_oversized_dataset_still_rejected(self) -> None:
         with self.assertRaises(ValueError) as ctx:
             build_preregistration_commitment(_flow(MAX_DATASET_ITEMS + 1))

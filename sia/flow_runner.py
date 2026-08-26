@@ -364,6 +364,15 @@ def _audit_llm_flow(
     report_dict = report.to_dict()
     report_dict["name"] = flow.get("name", "unnamed-llm-flow")
     report_dict["kind"] = "llm_flow"
+    # Ворота живости/цен, прогнанные В ТОМ ЖЕ сеансе перед прогоном
+    # (scripts/gate_check.py печатает готовый словарь): попадают в
+    # манифест -> под подпись code_hash. Манифест не входит в коммитмент,
+    # поэтому формат обязательства не меняется; время ворот публикуется,
+    # а не остаётся в болтовне сессии.
+    gate_evidence = flow.get("gate_evidence")
+
+    if gate_evidence:
+        report_dict["manifest"]["gate_evidence"] = gate_evidence
     # Обязательство предрегистрации: хеши параметров аудита, которые
     # должны быть закоммичены в цепочку ДО прогона (см. sentinel API).
     report_dict["preregistration"] = LLMFlowAuditor.preregistration_commitment(
