@@ -58,5 +58,6 @@
     "output_token_usd_per_m": 0.08
   },
   "repetitions": 2,
-  "confidence": 0.95
+  "confidence": 0.95,
+  "_deprecated": "2026-08-26: NVIDIA NIM endpoints answer 404 account-wide; kept for history. Re-run scripts/gate_check.py against a living provider before any use."
 }
