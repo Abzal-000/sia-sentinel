@@ -2293,5 +2293,7 @@
     "priced_model_name": "openai/gpt-oss-20b",
     "price_source_url": "https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints",
     "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.075/0.30 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
-  }
+  },
+  "anchor_declaration": "external-anchor",
+  "anchor_reference": "rekor:0000000000000000000000000000000000000000000000000000000000000000:0"
 }

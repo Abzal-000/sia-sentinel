@@ -442,6 +442,37 @@ class RekorAnchorTransportTestCase(unittest.TestCase):
         pem = base64.b64decode(spec["signature"]["publicKey"]["content"])
         self.assertIn(b"BEGIN PUBLIC KEY", pem)
 
+    def test_arbitrary_payload_anchored_instead_of_commitment(self) -> None:
+        """Вариант (3) записи №1: якорятся канонические байты обязательства
+        с занулённой ссылкой — publish принимает payload напрямую."""
+        import base64
+        import hashlib as hashlib_mod
+        import json
+
+        from sentinel import ed25519ph
+
+        signer = self._TestSigner()
+        fake = _FakeHttpxModule(status_code=201, json_payload={"rk-p": {"logIndex": 1}})
+        self._inject_fake_httpx(fake)
+
+        payload = json.dumps(
+            {"anchor_reference": None, "dataset_sha256": "ab" * 32},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+
+        result = RekorAnchorTransport(signer=signer).publish(self._checkpoint(), payload)
+
+        self.assertTrue(result["ok"])
+        spec = fake.calls[0]["json"]["spec"]
+        value = hashlib_mod.sha512(payload).digest()
+        self.assertEqual(spec["data"]["hash"]["value"], value.hex())
+        # Подпись — ph над PH(M)=value, как примет Rekor
+        content = base64.b64decode(spec["signature"]["content"])
+        self.assertTrue(
+            ed25519ph.verify_digest(ed25519ph.public_key(signer.seed), value, content)
+        )
+
     def test_conflict_recovers_index_and_reference(self) -> None:
         """Ожидаемый путь повтора: 409 c Location -> GET по entryUUID ->
         готовая строка anchor_reference, а не ok без данных для вставки."""

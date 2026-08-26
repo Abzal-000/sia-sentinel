@@ -191,16 +191,26 @@ class RekorAnchorTransport:
 
     # --- тело записи ---------------------------------------------------
 
-    def _hashedrekord_body(self, checkpoint: dict[str, Any]) -> dict[str, Any]:
-        from .receipt_registry import _checkpoint_commitment
-
+    def _hashedrekord_body(
+        self,
+        checkpoint: dict[str, Any],
+        payload: Optional[bytes] = None,
+    ) -> dict[str, Any]:
         signer = self._signer_ready()
-        # Rekor трактует декодированное spec.data.hash.value как ГОТОВЫЙ
-        # PH(M) (Go требует len==64 при Options{SHA512}) и верифицирует с
-        # WithED25519ph. Значит ровно ОДИН хеш — sha512 коммитмента; любой
-        # до-хеш сообщения даёт 'ed25519: invalid signature' (ловушка
-        # «один хеш лишний» покрыта самотестом sentinel/ed25519ph).
-        value = hashlib.sha512(_checkpoint_commitment(checkpoint)).digest()
+
+        if payload is not None:
+            # Произвольные байты (например, канон обязательства с
+            # занулённой ссылкой — вариант (3) записи №1)
+            value = hashlib.sha512(payload).digest()
+        else:
+            from .receipt_registry import _checkpoint_commitment
+
+            # Rekor трактует декодированное spec.data.hash.value как ГОТОВЫЙ
+            # PH(M) (Go требует len==64 при Options{SHA512}) и верифицирует с
+            # WithED25519ph. Значит ровно ОДИН хеш — sha512 коммитмента; любой
+            # до-хеш сообщения даёт 'ed25519: invalid signature' (ловушка
+            # «один хеш лишний» покрыта самотестом sentinel/ed25519ph).
+            value = hashlib.sha512(_checkpoint_commitment(checkpoint)).digest()
 
         return {
             # ВНИМАНИЕ: публичный инстанс регистрирует hashedrekord именно
@@ -221,10 +231,14 @@ class RekorAnchorTransport:
             },
         }
 
-    def publish(self, checkpoint: dict[str, Any]) -> dict[str, Any]:
+    def publish(
+        self,
+        checkpoint: dict[str, Any],
+        payload: Optional[bytes] = None,
+    ) -> dict[str, Any]:
         try:
             signer = self._signer_ready()
-            body = self._hashedrekord_body(checkpoint)
+            body = self._hashedrekord_body(checkpoint, payload=payload)
         except Exception as exc:
             logger.error("Rekor anchor: cannot build entry: %s", exc)
             return {"ok": False, "detail": f"cannot build entry: {exc}"}

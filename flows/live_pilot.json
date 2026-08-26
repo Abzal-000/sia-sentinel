@@ -44,20 +44,27 @@
     }
   ],
   "old": {
-    "model_name": "meta/llama-3.3-70b-instruct",
-    "base_url": "https://integrate.api.nvidia.com/v1",
-    "api_key_env": "NVIDIA_API_KEY",
-    "input_token_usd_per_m": 0.88,
-    "output_token_usd_per_m": 2.64
+    "model_name": "openai/gpt-oss-120b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "api_key_env": "GROQ_API_KEY",
+    "input_token_usd_per_m": 0.15,
+    "output_token_usd_per_m": 0.6,
+    "temperature": 0.0,
+    "reasoning_effort": "low",
+    "prices_as_of": "2026-08-26",
+    "catalog_version": "groq-2026-08-26-r1"
   },
   "new": {
-    "model_name": "meta/llama-3.1-8b-instruct",
-    "base_url": "https://integrate.api.nvidia.com/v1",
-    "api_key_env": "NVIDIA_API_KEY",
-    "input_token_usd_per_m": 0.04,
-    "output_token_usd_per_m": 0.08
+    "model_name": "openai/gpt-oss-20b",
+    "base_url": "https://api.groq.com/openai/v1",
+    "api_key_env": "GROQ_API_KEY",
+    "input_token_usd_per_m": 0.075,
+    "output_token_usd_per_m": 0.3,
+    "temperature": 0.0,
+    "reasoning_effort": "low",
+    "prices_as_of": "2026-08-26",
+    "catalog_version": "groq-2026-08-26-r1"
   },
   "repetitions": 2,
-  "confidence": 0.95,
-  "_deprecated": "2026-08-26: NVIDIA NIM endpoints answer 404 account-wide; kept for history. Re-run scripts/gate_check.py against a living provider before any use."
+  "confidence": 0.95
 }
