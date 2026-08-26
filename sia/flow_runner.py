@@ -257,22 +257,32 @@ def build_preregistration_commitment(flow: dict[str, Any]) -> dict[str, Any]:
         )
 
     # external-anchor — положительное заявление, оно обязано быть
-    # проверяемым: идентификатор записи (Rekor 'rekor:<uuid>:<index>'
-    # либо дайджест CMS-токена RFC 3161 — 64 hex). unanchored — признание,
-    # ссылка ему не нужна.
+    # проверяемым. Формы несут РАЗНУЮ силу (зафиксировано в спеке):
+    #   rekor:<entry-id>:<index> — указатель в ПУБЛИЧНЫЙ append-only лог,
+    #     третья сторона достаёт запись сама; entry-id у публичного
+    #     инстанса 64 ИЛИ 80 hex (шардированный ID = дерево+лист) —
+    #     строгая проверка «ровно 64» отвергла бы настоящий ответ ровно
+    #     в момент записи №1;
+    #   rfc3161:<64hex> — дайджест CMS-токена: сам по себе нигде не
+    #     достаётся, он связывает токен, который оператор обязан
+    #     опубликовать рядом; до публикации проверить нельзя.
+    # Голые значения без префикса отвергаются: форма обязана быть
+    # самоописывающей.
     anchor_reference = (flow.get("anchor_reference") or "").strip()
 
     if anchor_declaration == "external-anchor":
         import re as _re
 
         if not _re.fullmatch(
-            r"rekor:[^:\s]+:\d+|[0-9a-f]{64}", anchor_reference or ""
+            r"rekor:(?:[0-9a-f]{64}|[0-9a-f]{80}):\d+|rfc3161:[0-9a-f]{64}",
+            anchor_reference or "",
         ):
             raise ValueError(
                 "anchor_declaration='external-anchor' requires a verifiable "
-                "'anchor_reference': 'rekor:<entry-uuid>:<log-index>' or the "
-                "64-hex digest of an RFC 3161 timestamp token. A bare claim "
-                "of anchoring is trust-shaped, not proof."
+                "'anchor_reference': 'rekor:<entry-id>:<log-index>' (entry "
+                "id is 64 or 80 hex as the public instance returns) or "
+                "'rfc3161:<64-hex token digest>'. A bare claim of anchoring "
+                "is trust-shaped, not proof."
             )
 
     dataset = flow.get("dataset") or []

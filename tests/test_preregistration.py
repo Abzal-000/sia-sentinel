@@ -31,7 +31,8 @@ LLM_FLOW = {
     # Правило «нет якоря — нет записи» в коде: без явного объявления
     # пререгистрация отказывает; external-anchor требует проверяемой ссылки
     "anchor_declaration": "external-anchor",
-    "anchor_reference": "rekor:00000000-0000-0000-0000-000000000000:1",
+    # Форма инстанса: 64 hex без дефисов (или 80 — шардированный ID)
+    "anchor_reference": f"rekor:{'0' * 64}:1",
 }
 
 
@@ -111,8 +112,7 @@ class PreregistrationAPITestCase(unittest.TestCase):
         # Явное признание статуса якоря замораживается в леджере
         self.assertEqual(commitment["anchor_declaration"], "external-anchor")
         self.assertEqual(
-            commitment["anchor_reference"],
-            "rekor:00000000-0000-0000-0000-000000000000:1",
+            commitment["anchor_reference"], f"rekor:{'0' * 64}:1"
         )
         self.assertEqual(commitment["dataset_size"], 2)
         self.assertIn("dataset_sha256", commitment)
@@ -140,6 +140,45 @@ class PreregistrationAPITestCase(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertIn("anchor_reference", response.text)
+
+    def test_external_anchor_with_malformed_reference_refused(self) -> None:
+        """Голый дайджест без префикса и dashed-UUID отвергаются: форма
+        обязана быть самоописывающей, entry-id — как отдаёт инстанс."""
+        malformed = dict(LLM_FLOW)
+        malformed["anchor_reference"] = "a" * 64
+
+        response = self.client.post(
+            "/v1/preregistrations",
+            json={"flow": malformed},
+            headers=self._auth_headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("anchor_reference", response.text)
+
+        dashed = dict(LLM_FLOW)
+        dashed["anchor_reference"] = "rekor:00000000-0000-0000-0000-000000000000:1"
+
+        response = self.client.post(
+            "/v1/preregistrations",
+            json={"flow": dashed},
+            headers=self._auth_headers,
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_rfc3161_reference_accepted(self) -> None:
+        """Вторая самописующая форма: rfc3161:<64hex>."""
+        tsa = dict(LLM_FLOW)
+        tsa["anchor_reference"] = f"rfc3161:{'b' * 64}"
+
+        response = self.client.post(
+            "/v1/preregistrations", json={"flow": tsa}, headers=self._auth_headers
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json()["commitment"]["anchor_reference"],
+            f"rfc3161:{'b' * 64}",
+        )
 
     def test_unanchored_needs_no_reference(self) -> None:
         """Признание 'unanchored' — не претензия; ссылка ему не нужна."""
@@ -316,7 +355,7 @@ class ReplayToleranceTestCase(unittest.TestCase):
             "new": {"model_name": "new"},
             "replay_tolerance": 0.08,
             "anchor_declaration": "external-anchor",
-            "anchor_reference": "rekor:00000000-0000-0000-0000-000000000000:1",
+            "anchor_reference": f"rekor:{'0' * 64}:1",
         }
 
         commitment = build_preregistration_commitment(flow)
