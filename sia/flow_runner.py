@@ -383,6 +383,10 @@ def _audit_llm_flow(
         confidence=confidence,
         repetitions=repetitions,
         replay_tolerance=_replay_tolerance_from_flow(flow),
+        # Те же якорные поля, что зарегистрированы пререгистрацией: иначе
+        # леджер несёт признание, а аттестация — None (поймано репетицией)
+        anchor_declaration=flow.get("anchor_declaration"),
+        anchor_reference=flow.get("anchor_reference"),
     )
     return report_dict
 
