@@ -8,7 +8,12 @@ import time
 from dataclasses import dataclass, asdict
 from typing import Any, Optional
 
-from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
+from cryptography.hazmat.primitives.serialization import (
+    Encoding,
+    NoEncryption,
+    PrivateFormat,
+    PublicFormat,
+)
 from cryptography.hazmat.primitives.asymmetric.ed25519 import (
     Ed25519PrivateKey,
     Ed25519PublicKey,
@@ -182,6 +187,30 @@ class ReceiptGenerator:
             PublicFormat.Raw,
         )
         return base64.b64encode(raw).decode('ascii')
+
+    def sign_ph_digest(self, digest64: bytes) -> bytes:
+        """Ed25519ph (RFC 8032 HashEdDSA) над ГОТОВЫМ прехешем PH(M).
+
+        Для Rekor hashedrekord: инстанс трактует декодированное
+        spec.data.hash.value как PH(M) и верифицирует с WithED25519ph —
+        ровно ОДИН хеш, никаких до-хешей сообщения. pyca ph-API не имеет,
+        поэтому арифметика RFC 8032 §6 локальная (sentinel.ed25519ph,
+        самотест из вектора §7.3 + перекрёстные проверки с pyca). Seed —
+        тот же детерминированный, что у обычных квитанций: подписант
+        остаётся receipt-key.
+
+        Ограничение: скалярное умножение в ed25519ph НЕ защищено от атак
+        по времени (см. оговорку в его докстринге) — приемлемо для
+        офлайн/крон-анкоринга на собственной машине.
+        """
+        from .ed25519ph import sign_digest
+
+        seed = self._private_key.private_bytes(
+            Encoding.Raw,
+            PrivateFormat.Raw,
+            NoEncryption(),
+        )
+        return sign_digest(seed, digest64)
 
     def _compute_hash(self, data: str) -> str:
         """Compute SHA256 hash."""

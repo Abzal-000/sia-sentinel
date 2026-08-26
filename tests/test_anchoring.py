@@ -27,9 +27,15 @@ from sentinel.tenancy import TenantManager, UsageMeter
 
 
 class _FakeHttpxResponse:
-    def __init__(self, status_code: int, json_payload: dict | None = None):
+    def __init__(
+        self,
+        status_code: int,
+        json_payload: dict | None = None,
+        headers: dict | None = None,
+    ):
         self.status_code = status_code
         self._json_payload = json_payload
+        self.headers = headers or {}
         self.text = ""
 
     def json(self) -> dict:
@@ -46,6 +52,9 @@ class _FakeHttpxModule:
         self.status_code = status_code
         self._json_payload = json_payload
         self.calls: list[dict] = []
+        self.gets: list[dict] = []
+        # Ответ GET по умолчанию: та же полезная нагрузка, что и у POST
+        self.get_status_code = 200
 
     def post(self, url, content=None, headers=None, timeout=None, json=None):
         self.calls.append(
@@ -53,6 +62,13 @@ class _FakeHttpxModule:
              "timeout": timeout, "json": json}
         )
         return _FakeHttpxResponse(self.status_code, self._json_payload)
+
+    def get(self, url, params=None, headers=None, timeout=None):
+        self.gets.append({"url": url, "params": params})
+        return _FakeHttpxResponse(
+            self.get_status_code,
+            {params["entryUUID"]: {"logIndex": 9}} if params else {},
+        )
 
 
 class FileAnchorTransportTestCase(unittest.TestCase):
@@ -350,27 +366,34 @@ class RekorAnchorTransportTestCase(unittest.TestCase):
         }
 
     class _TestSigner:
+        """Seed-подписант на sentinel.ed25519ph: подпись реально
+        верифицируется verify_digest — как её проверит Rekor."""
+
         signed_by = "test"
 
         def __init__(self):
             import base64
 
             from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-                Ed25519PrivateKey,
+                Ed25519PublicKey,
             )
             from cryptography.hazmat.primitives.serialization import (
                 Encoding,
                 PublicFormat,
             )
 
-            self.key = Ed25519PrivateKey.generate()
-            pem = self.key.public_key().public_bytes(
+            from sentinel import ed25519ph
+
+            self._ph = ed25519ph
+            self.seed = bytes(range(32))
+            pub = ed25519ph.public_key(self.seed)
+            pem = Ed25519PublicKey.from_public_bytes(pub).public_bytes(
                 Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
             )
             self.public_pem_b64 = base64.b64encode(pem).decode("ascii")
 
-        def sign(self, payload: bytes) -> bytes:
-            return self.key.sign(payload)
+        def sign(self, digest64: bytes) -> bytes:
+            return self._ph.sign_digest(self.seed, digest64)
 
     def test_posts_verifiable_hashedrekord(self) -> None:
         import base64
@@ -389,36 +412,43 @@ class RekorAnchorTransportTestCase(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["rekor_uuid"], "rk-1")
         self.assertEqual(result["rekor_index"], 7)
-        self.assertEqual(result["rekor_signed_by"], "test")
+        # Готовая строка: копируется в flow, не набирается руками
+        self.assertEqual(result["anchor_reference"], "rekor:rk-1:7")
 
         body = fake.calls[0]["json"]
         self.assertEqual(body["apiVersion"], "0.0.1")
         self.assertEqual(body["kind"], "hashedrekord")
 
         spec = body["spec"]
-        expected = hashlib_mod.sha512(
+        value = hashlib_mod.sha512(
             _checkpoint_commitment(checkpoint)
-        ).hexdigest()
+        ).digest()
         self.assertEqual(spec["data"]["hash"]["algorithm"], "sha512")
-        self.assertEqual(spec["data"]["hash"]["value"], expected)
+        self.assertEqual(spec["data"]["hash"]["value"], value.hex())
 
-        # Подпись в записи реально проверяется приложенным ключом: Rekor
-        # верифицирует над sha512(декодированное значение хеша)
+        # Подпись — Ed25519ph над PH(M)=value, как её примет Rekor
         content = base64.b64decode(spec["signature"]["content"])
-        message = hashlib_mod.sha512(bytes.fromhex(expected)).digest()
-        signer.key.public_key().verify(content, message)
+        pub = signer._ph.public_key(signer.seed)
+        self.assertTrue(signer._ph.verify_digest(pub, value, content))
 
         pem = base64.b64decode(spec["signature"]["publicKey"]["content"])
         self.assertIn(b"BEGIN PUBLIC KEY", pem)
 
-    def test_conflict_means_already_anchored(self) -> None:
-        self._inject_fake_httpx(_FakeHttpxModule(status_code=409))
+    def test_conflict_recovers_index_and_reference(self) -> None:
+        """Ожидаемый путь повтора: 409 -> GET по entryUUID -> готовая
+        строка anchor_reference, а не ok без данных для вставки."""
+        fake = _FakeHttpxModule(status_code=409, json_payload={"rk-dup": {}})
+        self._inject_fake_httpx(fake)
 
-        transport = RekorAnchorTransport(signer=self._TestSigner())
-        result = transport.publish(self._checkpoint())
+        result = RekorAnchorTransport(signer=self._TestSigner()).publish(
+            self._checkpoint()
+        )
 
         self.assertTrue(result["ok"])
-        self.assertIn("already anchored", result["detail"])
+        self.assertEqual(result["rekor_uuid"], "rk-dup")
+        self.assertEqual(result["rekor_index"], 9)
+        self.assertEqual(result["anchor_reference"], "rekor:rk-dup:9")
+        self.assertEqual(fake.gets[0]["params"], {"entryUUID": "rk-dup"})
 
     def test_signing_failure_reported_before_http(self) -> None:
         fake = _FakeHttpxModule(status_code=201)

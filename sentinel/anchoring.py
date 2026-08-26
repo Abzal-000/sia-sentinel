@@ -129,20 +129,16 @@ class HttpAnchorTransport:
 class RekorAnchorTransport:
     """Публикует хеш коммитмента чекпоинта в Rekor (Sigstore), hashedrekord.
 
-    СТАТУС (2026-08-24): транспорт реализован, покрыт юнит-тестами,
-    включается только REKOR_ANCHOR=1 (по умолчанию ВЫКЛЮЧЕН). ЖИВОЙ ПРИЁМ
-    ПОКА НЕ ДОСТИГНУТ — не включать для записи №1 до подтверждённого
-    smoke-теста. Что уже выяснено живыми прогонами против
-    rekor.sigstore.dev: apiVersion обязан быть '0.0.1' (не '0.1.0');
-    publicKey.content = base64(PEM-ТЕКСТ), не base64(DER); ветка Эд25519
-    принимает только algorithm='sha512' ('SHA-256 not in [SHA-512]');
-    подпись верифицируется через x509-слой с опцией WithED25519ph — то
-    есть Эд25519PH по RFC 8032 (прехеш), а пять наивных конструкций
-    сообщения (raw value / sha512(value) / dom2-ph конкатенации / hexstr)
-    инстанс отвергает как 'invalid signature'. Оставшийся шаг: точно
-    воспроизвести ph-подпись (Go x/crypto SignWithOpts либо чистая
-    реализация RFC 8032 §5.1) или перейти на RFC 3161 TSA, где CMS-токен
-    проверяется офлайн без экзотических режимов.
+    СТАТУС (2026-08-26): подпись приведена к Ed25519ph (RFC 8032) через
+    sentinel/ed25519ph — эталон с вектором §7.3, перекрёстными проверками
+    pyca и ловушкой «лишнего хеша»; publish() возвращает готовую строку
+    anchor_reference, ветка 409 добирает индекс GET'ом по entryUUID.
+    ВКЛЮЧАЕТСЯ ТОЛЬКО REKOR_ANCHOR=1 (по умолчанию ВЫКЛЮЧЕН). Живой smoke
+    на rekor.sigstore.dev — НЕОБРАТИМАЯ запись в публичный лог: запускать
+    осознанно, отдельным решением оператора, до записи №1.
+    Установленное ранее живыми прогонами: apiVersion '0.0.1';
+    publicKey.content = base64(PEM-текст); ветка Эд25519 — только sha512
+    и x509 WithED25519ph.
 
     Замысел проверки у третьей стороны неизменен: файл чекпоинта ->
     пересчитать SHA-512 коммитмента -> сверить со значением в записи ->
@@ -199,11 +195,12 @@ class RekorAnchorTransport:
         from .receipt_registry import _checkpoint_commitment
 
         signer = self._signer_ready()
-        # Rekor верифицирует подпись над sha512(декодированное значение
-        # хеша) — двойной SHA-512 подтверждён живым прогоном (без него:
-        # 'ed25519: invalid signature').
+        # Rekor трактует декодированное spec.data.hash.value как ГОТОВЫЙ
+        # PH(M) (Go требует len==64 при Options{SHA512}) и верифицирует с
+        # WithED25519ph. Значит ровно ОДИН хеш — sha512 коммитмента; любой
+        # до-хеш сообщения даёт 'ed25519: invalid signature' (ловушка
+        # «один хеш лишний» покрыта самотестом sentinel/ed25519ph).
         value = hashlib.sha512(_checkpoint_commitment(checkpoint)).digest()
-        message = hashlib.sha512(value).digest()
 
         return {
             # ВНИМАНИЕ: публичный инстанс регистрирует hashedrekord именно
@@ -218,7 +215,7 @@ class RekorAnchorTransport:
                     }
                 },
                 "signature": {
-                    "content": base64.b64encode(signer.sign(message)).decode("ascii"),
+                    "content": base64.b64encode(signer.sign(value)).decode("ascii"),
                     "publicKey": {"content": signer.public_pem_b64},
                 },
             },
@@ -259,20 +256,67 @@ class RekorAnchorTransport:
                 entry = (
                     payload.get(entry_uuid, {}) if isinstance(payload, dict) else {}
                 )
-                return {
+                result: dict[str, Any] = {
                     "ok": True,
                     "detail": f"anchored in Rekor: {entry_uuid}",
                     "rekor_uuid": entry_uuid,
                     "rekor_index": entry.get("logIndex"),
                     "rekor_signed_by": signer.signed_by,
                 }
+                # Готовая строка для anchor_reference: валидатор формы
+                # опечатку при ручном наборе не поймает — копировать, а не
+                # набирать руками.
+                if entry_uuid and entry.get("logIndex") is not None:
+                    result["anchor_reference"] = (
+                        f"rekor:{entry_uuid}:{entry.get('logIndex')}"
+                    )
+
+                return result
 
             if response.status_code == 409:
-                return {
+                # Ожидаемый путь повтора: запись уже в логе, но без uuid и
+                # индекса вставлять нечего. uuid добирается из Location или
+                # тела конфликта, индекс — GET по entryUUID.
+                entry_uuid = self._uuid_from_conflict(response)
+                index: Any = None
+
+                if entry_uuid:
+                    detail = httpx.get(
+                        f"{self.url}/api/v1/log/entries",
+                        params={"entryUUID": entry_uuid},
+                        headers={"Accept": "application/json"},
+                        timeout=self.timeout,
+                    )
+
+                    if detail.status_code < 300:
+                        payload = detail.json()
+                        existing = (
+                            payload.get(entry_uuid, {})
+                            if isinstance(payload, dict)
+                            else {}
+                        )
+                        index = existing.get("logIndex")
+
+                recovered: dict[str, Any] = {
                     "ok": True,
-                    "detail": "already anchored: Rekor returned 409 Conflict",
+                    "detail": (
+                        f"already anchored: {entry_uuid}"
+                        if entry_uuid
+                        else "already anchored (409); reference unavailable"
+                    ),
                     "rekor_signed_by": signer.signed_by,
                 }
+
+                if entry_uuid:
+                    recovered["rekor_uuid"] = entry_uuid
+
+                if index is not None:
+                    recovered["rekor_index"] = index
+                    recovered["anchor_reference"] = (
+                        f"rekor:{entry_uuid}:{index}"
+                    )
+
+                return recovered
 
             return {
                 "ok": False,
@@ -285,9 +329,29 @@ class RekorAnchorTransport:
             logger.error("Rekor anchor failed: %s", exc)
             return {"ok": False, "detail": str(exc)}
 
+    @staticmethod
+    def _uuid_from_conflict(response: Any) -> Optional[str]:
+        """Достаёт UUID существующей записи из 409 (Location или тело)."""
+        location = ""
+        headers = getattr(response, "headers", None) or {}
+        location = headers.get("Location") or "" if hasattr(headers, "get") else ""
+
+        if location:
+            tail = location.rstrip("/").rsplit("/", 1)[-1]
+
+            if tail:
+                return tail
+
+        try:
+            payload = response.json()
+        except Exception:
+            return None
+
+        return next(iter(payload), None) if isinstance(payload, dict) else None
+
 
 class _ReceiptKeySigner:
-    """Подписывает дайджест тем же ключом, что и чекпоинт леджера."""
+    """Подписывает PH(M) тем же ключом, что чекпоинт леджера (Ed25519ph)."""
 
     signed_by = "receipt-key"
 
@@ -309,15 +373,14 @@ class _ReceiptKeySigner:
         )
         self.public_pem_b64 = _b64.b64encode(pem).decode("ascii")
 
-    def sign(self, payload: bytes) -> bytes:
-        import base64 as _b64
-
-        return _b64.b64decode(self._generator.sign_bytes(payload))
+    def sign(self, digest64: bytes) -> bytes:
+        return self._generator.sign_ph_digest(digest64)
 
 
 class _EphemeralSigner:
-    """Эфемерный ключ: существование дайджеста доказывает, подписанта
-    чекпоинта связать нельзя — результат честно несёт signed_by=ephemeral."""
+    """Эфемерный ключ в режиме Ed25519ph; результат честно несёт
+    signed_by=ephemeral — существование дайджеста доказывает, подписанта
+    чекпоинта связать нельзя."""
 
     signed_by = "ephemeral"
 
@@ -329,17 +392,26 @@ class _EphemeralSigner:
         )
         from cryptography.hazmat.primitives.serialization import (
             Encoding,
+            NoEncryption,
+            PrivateFormat,
             PublicFormat,
         )
 
         self._key = Ed25519PrivateKey.generate()
+        # pyca raw private = 32-байтный seed — тот же формат, что ест
+        # sentinel.ed25519ph.sign_digest.
+        self._seed = self._key.private_bytes(
+            Encoding.Raw, PrivateFormat.Raw, NoEncryption()
+        )
         pem = self._key.public_key().public_bytes(
             Encoding.PEM, PublicFormat.SubjectPublicKeyInfo
         )
         self.public_pem_b64 = _b64.b64encode(pem).decode("ascii")
 
-    def sign(self, payload: bytes) -> bytes:
-        return self._key.sign(payload)
+    def sign(self, digest64: bytes) -> bytes:
+        from .ed25519ph import sign_digest
+
+        return sign_digest(self._seed, digest64)
 
 
 def publish_checkpoint(
