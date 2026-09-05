@@ -153,6 +153,30 @@ Tenant admins cannot see other tenants or change plans.
 
 ---
 
+## Record №1 — the beacon and how to re-verify it yourself
+
+The first publicly anchored record: a live GSM8K audit of
+`gpt-oss-120b → gpt-oss-20b` (Groq, n=450, δ=5pp, preregistered in the
+ledger before the run, commitment anchored in Sigstore Rekor). Verdict:
+**non_inferior**, verified savings **50.5%** — with the pre-run prediction
+(27.6% chance of a pass) published alongside the commitment.
+
+An outsider re-derives the verdict from the published artifacts alone —
+no trust in the auditor, no network except the public Rekor log:
+
+```bash
+# 1. Signature, chain, checkpoint:
+./venv/Scripts/python.exe verifier/sia_verifier/__main__.py \
+  artifacts/record1/attestation.json \
+  --chain receipts/registry.jsonl --checkpoint receipts/checkpoints.jsonl
+# 2. Re-derive the verdict itself (b/c, MOVER/McNemar, MDD, savings,
+#    Rekor anchor digest, report→signature binding):
+./venv/Scripts/python.exe verifier/sia_verifier/rederive.py
+```
+
+Walkthrough with all eight checks explained:
+[`docs/record1-how-to-reverify.md`](docs/record1-how-to-reverify.md).
+
 ## API overview
 
 | Endpoint | Auth | Description |
