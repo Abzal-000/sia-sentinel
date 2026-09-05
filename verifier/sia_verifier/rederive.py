@@ -401,7 +401,7 @@ def rederive(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        prog="sia-rededuce-1",
+        prog="sia-rederive",
         description="Independently re-derive the Record-1 beacon verdict from published artifacts.",
     )
     parser.add_argument("--artifacts", type=Path, default=Path("artifacts/record1"))
