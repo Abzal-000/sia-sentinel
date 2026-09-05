@@ -18,9 +18,11 @@ pip install sia-verifier
 ```
 
 Единственная зависимость — `cryptography`. Никаких сетевых вызовов.
-Пакет ставит три команды: `sia-verifier` (подпись/цепь/чекпоинт),
+Пакет ставит четыре команды: `sia-verifier` (подпись/цепь/чекпоинт),
 `sia-rederive` (перевывод вердикта записи из опубликованных артефактов —
-см. [`record1-how-to-reverify.md`](record1-how-to-reverify.md)) и
+см. [`record1-how-to-reverify.md`](record1-how-to-reverify.md)),
+`sia-replay` (сравнение независимого повторного прогона с записью —
+исполняет задекларированный `replay_tolerance`; см. раздел 4 там же) и
 `sia-holdout` (инструмент аудитора holdout, `docs/holdout-design.md`).
 До публикации на PyPI — установка из репозитория:
 `pip install ./verifier`.

@@ -1,16 +1,17 @@
-# Публикация sia-verifier 1.2.0 на PyPI — пошаговая инструкция
+# Публикация sia-verifier 1.3.0 на PyPI — пошаговая инструкция
 
 Статус: пакет **собран и проверен** (2026-09-05): wheel + sdist лежат в
-`verifier/dist/`, чистая установка в изолированный venv работает, все три
-console-скрипта (`sia-verifier`, `sia-rederive`, `sia-holdout`) прогнаны на
-живых артефактах записи №1 (VALID / REDERIVED YES / OK). Остался сам аплоад —
+`verifier/dist/`, чистая установка в изолированный venv работает, все четыре
+console-скрипта (`sia-verifier`, `sia-rederive`, `sia-replay`, `sia-holdout`)
+прогнаны на живых артефактах записи №1 (VALID / REDERIVED YES / replay
+WITHIN TOLERANCE на самосравнении / holdout OK). Остался сам аплоад —
 он требует аккаунта оператора, поэтому здесь шаги.
 
 ## Что уже сделано (не повторять)
 
-- `verifier/pyproject.toml`: версия 1.2.0, три console-скрипта.
-- `sia_verifier/__init__.py`: 1.2.0, описание CLI.
-- Сборка: `cd verifier && python -m build` → `dist/sia_verifier-1.2.0*`.
+- `verifier/pyproject.toml`: версия 1.3.0, четыре console-скрипта.
+- `sia_verifier/__init__.py`: 1.3.0, описание CLI.
+- Сборка: `cd verifier && python -m build` → `dist/sia_verifier-1.3.0*`.
 - Изолированная проверка: venv без проекта → `pip install <wheel>` →
   все команды отработали на `artifacts/record1`.
 
@@ -53,7 +54,7 @@ console-скрипта (`sia-verifier`, `sia-rederive`, `sia-holdout`) прог�
 
 ## Правила версий
 
-- 1.2.0 — текущая (rederive + holdout + kk/ru-витрина — не входит в пакет,
+- 1.3.0 — текущая (replay Б2 + rederive + holdout); 1.2.0 — была первая
   это серверная часть).
 - Любое изменение `core.py`/`rederive.py`/`holdout.py` → бамп версии
   (патч — багфикс, минор — новая проверка/команда) и пересборка.

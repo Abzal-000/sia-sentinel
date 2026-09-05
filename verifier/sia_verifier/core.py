@@ -330,7 +330,7 @@ def verify_key_declarations(
 
         # Публичный ключ подписанта: сам декларируемый ключ (генезис) либо
         # ранее объявленный ключ (ротация)
-        signer_key_b64 = keys.get(signer_kid)
+        signer_key_b64 = keys.get(str(signer_kid))
 
         if signer_key_b64 is None:
             if signer_kid == kid:
