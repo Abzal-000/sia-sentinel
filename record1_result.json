@@ -1,0 +1,18 @@
+{
+  "registry_id": "9788a535196a408aa6faf9a1f7d8bdd0",
+  "link_valid": true,
+  "link_reason": null,
+  "savings_verified": true,
+  "savings_ratio": 0.505347,
+  "non_inferior": true,
+  "b": 10,
+  "c": 4,
+  "n": 450,
+  "ci_lower": -0.03232114276651871,
+  "ci_upper": 0.003724573831923964,
+  "mdd": 0.04176356661639448,
+  "mcnemar_p": 0.17956542968749645,
+  "declared_limits_present": true,
+  "anchor_declaration": "external-anchor",
+  "anchor_reference_tail": "44934441f00c8:2601942504"
+}
