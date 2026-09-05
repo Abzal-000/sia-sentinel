@@ -37,7 +37,6 @@ import base64
 import hashlib
 import json
 import math
-import sys
 import urllib.request
 from pathlib import Path
 from typing import Any
@@ -139,6 +138,54 @@ def _mdd(
     return (z_alpha + Z_BETA_80) * math.sqrt(p_disc / n)
 
 
+def _commitment_from_flow(flow: dict[str, Any]) -> dict[str, Any]:
+    """Реконструкция обязательства preregistration/4 по spec §1.2.
+
+    Локальная (не импортирует sia.*): поля собираются из флоу ровно в том
+    порядке, как их строит LLMFlowAuditor.preregistration_commitment —
+    датасетный sha256 из prompt|expect, endpoints = public_dict() обеих
+    сторон (ценовые поля, температура, reasoning_effort, провенанс), все
+    скаляры δ/confidence/R/replay_tolerance, якорные поля. Совместимость
+    с репозиторным кодом заперта золотым тестом на реальном дайджесте
+    записи №1 (af720aad…7c33a8b6) в tests/test_rederive.py.
+    """
+    dataset = flow.get("dataset") or []
+    old, new = flow.get("old") or {}, flow.get("new") or {}
+
+    def public(block: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "model_name": block.get("model_name"),
+            "input_token_usd_per_m": block.get("input_token_usd_per_m"),
+            "output_token_usd_per_m": block.get("output_token_usd_per_m"),
+            "base_url": block.get("base_url"),
+            "temperature": block.get("temperature", 0.0),
+            "reasoning_effort": block.get("reasoning_effort"),
+            "profile": block.get("profile", "standard"),
+            "seed": block.get("seed", 42),
+            "simulated_reliability": block.get("simulated_reliability"),
+            "prices_as_of": block.get("prices_as_of"),
+            "catalog_version": block.get("catalog_version"),
+            "price_source_url": block.get("price_source_url"),
+            "priced_model_name": block.get("priced_model_name"),
+            "price_basis_note": block.get("price_basis_note"),
+        }
+
+    return {
+        "protocol": "sia-preregistration/4",
+        "dataset_sha256": _dataset_hash(dataset),
+        "dataset_size": len(dataset),
+        "metric": "expect_contains/digit-anchored",
+        "delta": float(flow.get("delta", 0.05)),
+        "confidence": flow.get("confidence", 0.95),
+        "repetitions": max(1, int(flow.get("repetitions", 1))),
+        "replay_tolerance": max(0.0, min(1.0, float(flow.get("replay_tolerance", 0.05)))),
+        "replay_tolerance_rule": "directional-one-sided:toward-claim",
+        "anchor_declaration": (flow.get("anchor_declaration") or "").strip() or None,
+        "anchor_reference": (flow.get("anchor_reference") or "").strip() or None,
+        "endpoints": {"old": public(old), "new": public(new)},
+    }
+
+
 def _rekor_digest(uuid: str) -> tuple[bool, str, str, Any]:
     """Достаёт дайджест записи Rekor через публичный API.
 
@@ -195,13 +242,9 @@ def rederive(
     if check_rekor and anchor_ref.startswith("rekor:"):
         parts = anchor_ref.split(":")
         uuid, index = parts[1], parts[2]
-        # канон обязательства из репозиторного кода предрегистрации:
-        # построить commitment по флоу, занулить reference, канонизировать
-        repo_root = Path(__file__).resolve().parents[2]
-        sys.path.insert(0, str(repo_root))
-        from sia.flow_runner import build_preregistration_commitment  # noqa: E402
-
-        commitment = build_preregistration_commitment(flow)
+        # канон обязательства строится ЛОКАЛЬНО (см. _commitment_from_flow):
+        # занулить reference, канонизировать sort_keys+compact
+        commitment = _commitment_from_flow(flow)
         commitment["anchor_reference"] = None
         local_sha512 = hashlib.sha512(_canon(commitment)).hexdigest()
 

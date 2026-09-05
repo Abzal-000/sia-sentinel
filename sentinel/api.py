@@ -1732,11 +1732,65 @@ def _esc(value: Any) -> str:
     return html.escape(str(value), quote=True)
 
 
+# п.10: витрина реестра на двух языках (позицирование «made in KZ» —
+# суверенный стандарт эффективности ИИ; страницы — дёшево, один раз).
+# ?lang=kk|ru, дефолт en. Словарь только для статических надписей —
+# сами данные (названия флоу, аттестации) языконезависимы.
+PORTAL_TEXTS = {
+    "en": {
+        "title": "Proof-of-Savings Attestation",
+        "registry_title": "Public Attestation Registry",
+        "registry_intro": "Attestations published by tenants who opted in. Each entry is independently verifiable.",
+        "verdict_verified": "VERIFIED",
+        "verdict_not_verified": "NOT VERIFIED",
+        "th_attestation": "Attestation", "th_flow": "Flow", "th_kind": "Kind",
+        "th_verified": "Verified", "th_savings": "Savings", "th_issued": "Issued",
+        "row_empty": "No published attestations yet.",
+        "back_to_registry": "&larr; Public attestation registry",
+        "lang_switch": "ҚАЗ | РУС | EN",
+    },
+    "kk": {
+        "title": "Proof-of-Savings аттестаттауы",
+        "registry_title": "Аттестаттаулардың қоғамдық тізілімі",
+        "registry_intro": "Жариялауға келіскен қатысушылардың аттестаттаулары. Әрбір жазба тәуелсіз тексеруге болады.",
+        "verdict_verified": "РАСТАЛДЫ",
+        "verdict_not_verified": "РАСТАЛМАҒАН",
+        "th_attestation": "Аттестаттау", "th_flow": "Ағын", "th_kind": "Түрі",
+        "th_verified": "Тексерілген", "th_savings": "Үнем", "th_issued": "Шығарылған",
+        "row_empty": "Әзірге жарияланған аттестаттау жоқ.",
+        "back_to_registry": "&larr; Аттестаттаулардың қоғамдық тізілімі",
+        "lang_switch": "ҚАЗ | РУС | EN",
+    },
+    "ru": {
+        "title": "Аттестация Proof-of-Savings",
+        "registry_title": "Публичный реестр аттестаций",
+        "registry_intro": "Аттестации, опубликованные участниками с их согласия. Каждая запись проверяется независимо.",
+        "verdict_verified": "ПОДТВЕРЖДЕНО",
+        "verdict_not_verified": "НЕ ПОДТВЕРЖДЕНО",
+        "th_attestation": "Аттестация", "th_flow": "Флоу", "th_kind": "Тип",
+        "th_verified": "Проверено", "th_savings": "Экономия", "th_issued": "Выдано",
+        "row_empty": "Опубликованных аттестаций пока нет.",
+        "back_to_registry": "&larr; Публичный реестр аттестаций",
+        "lang_switch": "ҚАЗ | РУС | EN",
+    },
+}
+
+
+def _portal_texts(lang: Optional[str]) -> dict[str, str]:
+    key = (lang or "en").lower()
+    return PORTAL_TEXTS.get(key, PORTAL_TEXTS["en"])
+
+
 @app.get("/attestations/{registry_id}")
-def attestation_portal(registry_id: str):
-    """Human verification portal: verdict, claim, badge embed, JSON links."""
+def attestation_portal(registry_id: str, lang: Optional[str] = Query(None)):
+    """Human verification portal: verdict, claim, badge embed, JSON links.
+
+    п.10: ?lang=kk|ru|en — статические надписи портала на трёх языках
+    (Казахстан — суверенный якорь сети; данные записей не переводятся).
+    """
     from fastapi.responses import HTMLResponse
 
+    t = _portal_texts(lang)
     attestation = _build_attestation(registry_id)
     claim = attestation["claim"]
     verification = attestation["verification"]
@@ -1746,7 +1800,7 @@ def attestation_portal(registry_id: str):
     chain_ok = bool(verification.get("ledger_chain_valid"))
     verified = sig_ok and chain_ok and bool(claim.get("savings_verified"))
 
-    verdict = "VERIFIED" if verified else "NOT VERIFIED"
+    verdict = t["verdict_verified"] if verified else t["verdict_not_verified"]
     verdict_color = "#2e7d32" if verified else "#c62828"
     mark = lambda ok: "&#10003;" if ok else "&#10007;"  # noqa: E731
 
@@ -1758,7 +1812,7 @@ def attestation_portal(registry_id: str):
     )
 
     page = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="{_esc(lang or 'en')}">
 <head>
 <meta charset="utf-8" />
 <title>Attestation {_esc(registry_id)} — SIA Sentinel</title>
@@ -1774,7 +1828,7 @@ def attestation_portal(registry_id: str):
 </style>
 </head>
 <body>
-<h1>Proof-of-Savings Attestation</h1>
+<h1>{_esc(t["title"])}</h1>
 <p class="verdict">{verdict}</p>
 
 <div class="card">
@@ -1800,7 +1854,7 @@ def attestation_portal(registry_id: str):
   <pre>{_esc(badge_snippet)}</pre>
 </div>
 
-<p><a href="/registry">&larr; Public attestation registry</a></p>
+<p><a href="/registry">{t["back_to_registry"]}</a></p>
 </body>
 </html>"""
 
@@ -1808,10 +1862,14 @@ def attestation_portal(registry_id: str):
 
 
 @app.get("/registry")
-def public_registry_portal(limit: int = Query(50, ge=1, le=200)):
-    """Public HTML index of opted-in attestations."""
+def public_registry_portal(
+    limit: int = Query(50, ge=1, le=200),
+    lang: Optional[str] = Query(None),
+):
+    """Public HTML index of opted-in attestations (п.10: ?lang=kk|ru|en)."""
     from fastapi.responses import HTMLResponse
 
+    t = _portal_texts(lang)
     cards = receipt_registry.list_public(_is_tenant_published, limit=limit)
 
     rows = []
@@ -1831,13 +1889,13 @@ def public_registry_portal(limit: int = Query(50, ge=1, le=200)):
             "</tr>"
         )
 
-    body = "".join(rows) or '<tr><td colspan="6">No published attestations yet.</td></tr>'
+    body = "".join(rows) or f'<tr><td colspan="6">{_esc(t["row_empty"])}</td></tr>'
 
     page = f"""<!DOCTYPE html>
-<html lang="en">
+<html lang="{_esc(lang or 'en')}">
 <head>
 <meta charset="utf-8" />
-<title>Public Attestation Registry — SIA Sentinel</title>
+<title>{_esc(t["registry_title"])} — SIA Sentinel</title>
 <style>
   body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; margin: 2rem auto; max-width: 860px; color: #1c2733; }}
   table {{ border-collapse: collapse; width: 100%; }}
@@ -1846,10 +1904,10 @@ def public_registry_portal(limit: int = Query(50, ge=1, le=200)):
 </style>
 </head>
 <body>
-<h1>Public Attestation Registry</h1>
-<p>Attestations published by tenants who opted in. Each entry is independently verifiable.</p>
+<h1>{_esc(t["registry_title"])}</h1>
+<p>{_esc(t["registry_intro"])}</p>
 <table>
-<tr><th>Attestation</th><th>Flow</th><th>Kind</th><th>Verified</th><th>Savings</th><th>Issued</th></tr>
+<tr><th>{_esc(t["th_attestation"])}</th><th>{_esc(t["th_flow"])}</th><th>{_esc(t["th_kind"])}</th><th>{_esc(t["th_verified"])}</th><th>{_esc(t["th_savings"])}</th><th>{_esc(t["th_issued"])}</th></tr>
 {body}
 </table>
 </body>

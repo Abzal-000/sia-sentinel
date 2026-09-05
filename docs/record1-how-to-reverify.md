@@ -14,14 +14,16 @@
 
 ## Что понадобится
 
-- Python 3.11 и клон репозитория SIA Sentinel (или zip-распаковка)
-- Зависимости: `cryptography` (единственная), ставится из requirements.txt
+- Python 3.9+ и `pip install sia-verifier` (после публикации пакета; до неё —
+  `pip install ./verifier` из клона репозитория)
+- Артефакты записи: `artifacts/record1/`, `flows/beacon.json`,
+  `receipts/registry.jsonl`, `receipts/checkpoints.jsonl`
+  (в репозитории SIA Sentinel; после публичного деплоя — скачиваются с сайта)
 
 ## Шаг 1. Подпись, цепь, чекпоинт — `sia-verifier`
 
 ```bash
-./venv/Scripts/python.exe verifier/sia_verifier/__main__.py \
-  artifacts/record1/attestation.json \
+sia-verifier artifacts/record1/attestation.json \
   --chain receipts/registry.jsonl \
   --checkpoint receipts/checkpoints.jsonl
 ```
@@ -34,14 +36,15 @@
 целостность хеш-цепочки леджера и подпись чекпоинта головы.
 Ожидаемый вывод: `VERDICT: VALID`.
 
-## Шаг 2. Перевывод вердикта — `rederive`
+## Шаг 2. Перевывод вердикта — `sia-rederive`
 
 Второй инструмент не принимает на слово вообще ничего — он пересчитывает
 вывод из первичных чисел:
 
 ```bash
-./venv/Scripts/python.exe verifier/sia_verifier/rederive.py
-```
+sia-rederive
+# из корня репозитория (артефакты по умолчанию: artifacts/record1,
+# flows/beacon.json, receipts/registry.jsonl); флаг --no-rekor — офлайн
 
 Что именно сверяется (все восемь проверок):
 

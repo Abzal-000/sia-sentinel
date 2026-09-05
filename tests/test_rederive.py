@@ -19,6 +19,8 @@ VERIFIER_ROOT = REPO_ROOT / "verifier"
 sys.path.insert(0, str(VERIFIER_ROOT))
 
 from sia_verifier.rederive import (  # noqa: E402
+    _canon,
+    _commitment_from_flow,
     _mcnemar_exact,
     _mdd,
     _mover_paired_ci,
@@ -76,6 +78,45 @@ class RederiveDatasetHashTestCase(unittest.TestCase):
         ]
         joined = "2+2?|ANSWER=4\n3+3?|ANSWER=6"
         self.assertEqual(_dataset_hash(dataset), hashlib.sha256(joined.encode()).hexdigest())
+
+
+class RederiveLocalCommitmentTestCase(unittest.TestCase):
+    """Локальная реконструкция обязательства == репозиторному коду.
+
+    Золотой тест на РЕАЛЬНОМ флоу записи №1: дайджест af720aad…7c33a8b6 —
+    это байты, реально принятые Sigstore Rekor (uuid 108e…41f00c8,
+    индекс 2601942504). Если локальная реконструкция разъедется с
+    репозиторным build_preregistration_commitment (порядок полей, дефолты,
+    нормализация), этот тест упадёт первым — а с ним и вся автономность
+    rederive: внешний проверяющий пользуется ТОЛЬКО локальной версией.
+    """
+
+    FLOW = REPO_ROOT / "flows" / "beacon.json"
+    GOLDEN = "af720aad4ec3ff0b9db8eb7148b1ebb9445c2e71ae76c5c7d1fca838aa378e3d68d653762f4948b888ee51f91ed0a5854a86bfef6f02b0ff3b38d7427c33a8b6"
+
+    def test_local_commitment_matches_rekor_anchored_bytes(self) -> None:
+        import hashlib as _h
+        flow = json.loads(self.FLOW.read_text(encoding="utf-8-sig"))
+        commitment = _commitment_from_flow(flow)
+        commitment["anchor_reference"] = None
+        digest = _h.sha512(_canon(commitment)).hexdigest()
+        self.assertEqual(digest, self.GOLDEN)
+
+    def test_local_commitment_matches_repo_builder(self) -> None:
+        """Локальная реконструкция == sia.flow_runner (побитово)."""
+        flow = json.loads(self.FLOW.read_text(encoding="utf-8-sig"))
+        local = _commitment_from_flow(flow)
+        repo_root = REPO_ROOT
+        sys.path.insert(0, str(repo_root))
+        try:
+            from sia.flow_runner import build_preregistration_commitment
+            repo = build_preregistration_commitment(flow)
+        finally:
+            sys.path.remove(str(repo_root))
+        # repo-версия не зануляет reference — сравниваем тела полей
+        local_cmp = dict(local)
+        local_cmp["anchor_reference"] = repo["anchor_reference"]
+        self.assertEqual(_canon(local_cmp), _canon(repo))
 
 
 class RederivePipelineTestCase(unittest.TestCase):

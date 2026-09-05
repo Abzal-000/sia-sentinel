@@ -315,15 +315,18 @@ sia/            Audit engine: flows, optimizer, model catalog, Wilson CI
 sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, webhooks
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
-docs/           Attestation spec + JSON Schema
-tests/          591 tests (unittest)
+docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design
+tests/          653 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
 
 ## Status
 
-Prototype-stage, fully working core: live pilots against NVIDIA NIM endpoints
-have verified real savings claims; the test suite (591 tests) covers the audit
-engine, ledger, tenancy, billing, jobs persistence, public attestation network,
-self-service onboarding, and the SDK. See `SECURITY_REPORT.md` for the security review.
+Prototype-stage, fully working core: the first publicly anchored record
+(beacon, Groq, 50.5% verified savings, non-inferior verdict — see the
+Record №1 section above) plus 653 tests covering the audit engine, ledger,
+tenancy, billing, jobs persistence, public attestation network,
+self-service onboarding, the independent verifier (including verdict
+re-derivation and the auditor-side holdout tool), and the SDK. See
+`SECURITY_REPORT.md` for the security review.

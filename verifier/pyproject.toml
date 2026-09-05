@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sia-verifier"
-version = "1.1.0"
+version = "1.2.0"
 description = "Independent verifier for sia-attestation/1 Proof-of-Savings attestations — no trust in the auditor required"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -20,11 +20,14 @@ classifiers = [
 ]
 # Единственная зависимость — криптография. Никаких сетевых вызовов,
 # никакого SDK Sentinel: верификатор должен работать у любой третьей
-# стороны, которая не доверяет аудитору.
+# стороны, которая не доверяет аудитору. (rederive делает один
+# опциональный живой запрос к публичному логу Rekor — по флагу.)
 dependencies = ["cryptography>=41.0"]
 
 [project.scripts]
 sia-verifier = "sia_verifier.__main__:main"
+sia-rederive = "sia_verifier.rederive:main"
+sia-holdout = "sia_verifier.holdout:main"
 
 [project.urls]
 Homepage = "https://github.com/sia-sentinel/sia-sentinel"

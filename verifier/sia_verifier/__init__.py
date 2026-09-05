@@ -23,10 +23,16 @@ TrustChain. Никаких сетевых вызовов, никакого SDK S
    включение записи в tree head, ``verify_consistency`` — что дерево
    размера N является продолжением дерева размера M.
 
-CLI::
+CLI (v1.2.0)::
 
-    python -m sia_verifier attestation.json
-    python -m sia_verifier attestation.json --chain registry.jsonl
+    sia-verifier attestation.json [--chain registry.jsonl] [--checkpoint cp.json]
+    sia-rederive  [--artifacts DIR] [--flow F] [--chain C] [--no-rekor]
+    sia-holdout  make|reveal|verify ...
+
+Первая команда проверяет подпись/цепь/чекпоинт; вторая перевыводит сам
+вердикт записи (формулы считаются локально, входы пришиты к подписи через
+receipt.code_hash); третья — инструмент внешнего аудитора holdout (п.8).
+Все три доступны и как ``python -m sia_verifier.<module>``.
 
 Программа и API возвращают вердикт; ненулевой код выхода при
 невалидной аттестации позволяет встраивать проверку в CI.
@@ -48,7 +54,7 @@ from .core import (
     verify_receipt,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 __all__ = [
     "ATTESTATION_SPEC",

@@ -232,6 +232,51 @@ class PublicRegistryTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn("No published attestations yet", response.text)
 
+    # п.10: витрина на трёх языках (kk/ru — суверенное позиционирование)
+
+    def test_registry_page_lang_ru(self) -> None:
+        response = self.client.get("/registry", params={"lang": "ru"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Публичный реестр аттестаций", response.text)
+        self.assertIn("Опубликованных аттестаций пока нет", response.text)
+        self.assertIn('lang="ru"', response.text)
+
+    def test_registry_page_lang_kk(self) -> None:
+        response = self.client.get("/registry", params={"lang": "kk"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Аттестаттаулардың қоғамдық тізілімі", response.text)
+        self.assertIn("Әзірге жарияланған аттестаттау жоқ", response.text)
+
+    def test_registry_page_lang_unknown_falls_back_to_en(self) -> None:
+        response = self.client.get("/registry", params={"lang": "de"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Public Attestation Registry", response.text)
+
+    def test_portal_page_lang_ru(self) -> None:
+        registry_id = self._create_tenant_with_audit("acme")
+
+        response = self.client.get(
+            f"/attestations/{registry_id}", params={"lang": "ru"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("ПОДТВЕРЖДЕНО", response.text)
+        self.assertIn("Аттестация Proof-of-Savings", response.text)
+
+    def test_portal_page_lang_kk(self) -> None:
+        registry_id = self._create_tenant_with_audit("acme")
+
+        response = self.client.get(
+            f"/attestations/{registry_id}", params={"lang": "kk"}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Proof-of-Savings аттестаттауы", response.text)
+        self.assertIn("РАСТАЛДЫ", response.text)
+
 
 if __name__ == "__main__":
     unittest.main()
