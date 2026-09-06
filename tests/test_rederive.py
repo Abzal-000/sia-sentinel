@@ -203,6 +203,22 @@ class RederivePipelineTestCase(unittest.TestCase):
         self.assertFalse(result["rederived"])
         self.assertTrue(any("dataset_sha256" in f for f in result["failures"]))
 
+    def test_tampered_attestation_delta_vs_flow_fails(self) -> None:
+        # F4.6 из фальсификационной батареи: δ в аттестации подменена
+        # независимо от флоу (0.05 -> 0.10). Без кросс-сверки
+        # аттестация↔флоу перевывод по подменённой δ «подтвердил» бы
+        # подмену; теперь расхождение ловится даже без chain.
+        attestation, report, flow = self._inputs()
+        attestation["claim"]["preregistration"]["delta"] = 0.10
+        result = rederive(attestation, report, flow, chain=None, check_rekor=False)
+        self.assertFalse(result["rederived"])
+        self.assertTrue(any("delta attestation-vs-flow" in f for f in result["failures"]))
+
+    def test_matching_delta_passes_cross_check(self) -> None:
+        attestation, report, flow = self._inputs()
+        result = rederive(attestation, report, flow, chain=None, check_rekor=False)
+        self.assertFalse(any("attestation-vs-flow" in f for f in result["failures"]))
+
 
 if __name__ == "__main__":
     unittest.main()

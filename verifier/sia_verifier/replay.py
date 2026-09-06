@@ -160,6 +160,20 @@ def compare_replays(
 
     record_out = _outcomes(record, labels)
     replay_out = _outcomes(replay, labels)
+    label_set = set(labels)
+
+    # Прозрачность: метки провалов в replay, которых нет в датасете,
+    # молча исчезали бы из сравнения. Направление безопасное (невидимые
+    # провалы могут только НЕДОСЧИТАТЬ toward, т.е. быть щедрее к
+    # повторителю нельзя — недосчитанные away/toward лежат в датасете),
+    # но молчание — враг аудита: публикуем счётчик в отчёте.
+    unmatched: list[str] = []
+    for name, report in (("record", record), ("replay", replay)):
+        eq = report.get("equivalence") or {}
+        for side in ("failed_old", "failed_new"):
+            unmatched.extend(
+                label for label in (eq.get(side) or []) if label not in label_set
+            )
 
     toward = 0  # сдвиг К заявлению: новую лучше / старую хуже записи
     away = 0    # элементы, сдвинувшиеся ОТ заявления
@@ -201,6 +215,20 @@ def compare_replays(
 
     toward_share = toward / n
     within = toward_share <= tolerance
+    # Advisory (вердикт НЕ меняет — правило одностороннего допуска задано
+    # спекой §1.2 и belongs to the reviewer): большой away-дрейф —
+    # «повтор хуже записи» — не гейтится односторонним правилом, но это
+    # ровно направление, куда падает честный повтор ПОДДЕЛЬНОЙ записи или
+    # деградировавшей модели. Молчать об этом нельзя.
+    away_advisory = None
+    if away / n > tolerance:
+        away_advisory = (
+            f"away drift {away / n:.2%} exceeds the declared tolerance "
+            f"{tolerance:.2%}: the replay is WORSE for the new config than "
+            "the record. The one-sided rule does not gate this direction "
+            "(spec 1.2), but it is the signature of a non-reproducing "
+            "record or a degraded model — investigate before trusting."
+        )
 
     return {
         "rule": "directional-one-sided:toward-claim",
@@ -219,6 +247,8 @@ def compare_replays(
         "side_breakdown": side_breakdown,
         "tolerance": tolerance,
         "within_tolerance": within,
+        "unmatched_failure_labels": len(unmatched),
+        "away_advisory": away_advisory,
         "toward_labels": toward_labels,
         "away_labels": away_labels,
     }
@@ -271,6 +301,8 @@ def main(argv: list[str] | None = None) -> int:
               f"({result['away_share']:.2%})")
         print(f"side breakdown:     {result['side_breakdown']}")
         print(f"tolerance:          {result['tolerance']:.2%} (one-sided, toward-claim)")
+        if result.get("away_advisory"):
+            print(f"ADVISORY:           {result['away_advisory']}")
         print(f"VERDICT:            {'WITHIN TOLERANCE' if result['within_tolerance'] else 'REPLAY MISMATCH'}")
 
     return 0 if result["within_tolerance"] else 1

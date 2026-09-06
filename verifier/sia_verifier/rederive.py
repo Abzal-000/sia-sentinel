@@ -236,6 +236,22 @@ def rederive(
     if not (att_dsha == rep_dsha == dataset_sha):
         failures.append(_fail("dataset_sha256", (att_dsha, rep_dsha), dataset_sha))
 
+    # Кросс-сверка решения-критичных полей аттестации против ФЛОУ (не леджера):
+    # аттестация — проекция; если её δ или допуск подменены независимо от флоу,
+    # перевывод вердикта по подменённой δ мог бы «подтвердить» подмену.
+    # Леджерная сверка (ниже, chain) — вторая линия; эта работает и без цепи.
+    for field, default in (("delta", flow.get("delta", 0.05)),
+                           ("replay_tolerance", flow.get("replay_tolerance", 0.05))):
+        att_value = prereg_meta.get(field)
+        flow_value = flow.get(field, default)
+        if att_value is not None and flow_value is not None:
+            try:
+                differs = abs(float(att_value) - float(flow_value)) > 1e-12
+            except (TypeError, ValueError):
+                differs = True
+            if differs:
+                failures.append(_fail(f"{field} attestation-vs-flow", flow_value, att_value))
+
     # --- 2. Канон обязательства и якорь Rekor ---
     anchor_ref = (flow.get("anchor_reference") or "").strip()
     if check_rekor and anchor_ref.startswith("rekor:"):

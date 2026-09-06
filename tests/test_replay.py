@@ -204,6 +204,34 @@ class ReplayInapplicableTestCase(unittest.TestCase):
             compare_replays(record, _report(flow), flow)
         self.assertIn("duplicate", str(ctx.exception))
 
+    def test_away_drift_exceeding_tolerance_raises_advisory(self) -> None:
+        # F5.3-находка батареи: большой away-дрейф («повтор хуже записи»)
+        # не гейтится односторонним правилом, но обязан быть ВИДЕН —
+        # это подпись неподдающейся воспроизведению записи.
+        flow = _flow(100)
+        record = _report(flow, failed_old=[f"i{i}" for i in range(10)])
+        replay = _report(flow, failed_old=[])  # старая выправилась: 10 away
+        result = compare_replays(record, replay, flow)
+        self.assertTrue(result["within_tolerance"])  # toward = 0
+        self.assertGreaterEqual(result["away_elements"], 10)
+        self.assertIsNotNone(result["away_advisory"])
+        self.assertIn("WORSE", result["away_advisory"])
+
+    def test_symmetric_small_drift_has_no_advisory(self) -> None:
+        flow = _flow(100)
+        record = _report(flow, failed_old=["i0"])
+        replay = _report(flow, failed_old=["i1"])  # 1 toward, 1 away
+        result = compare_replays(record, replay, flow)
+        self.assertIsNone(result["away_advisory"])
+
+    def test_unmatched_failure_labels_counted(self) -> None:
+        # Метки вне датасета молча исчезали бы из сравнения — счётчик
+        # делает это прозрачным (направление безопасное, но не молчаливое).
+        flow = _flow(10)
+        record = _report(flow, failed_new=["ghost-label"])
+        result = compare_replays(record, _report(flow), flow)
+        self.assertEqual(result["unmatched_failure_labels"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()
