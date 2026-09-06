@@ -59,6 +59,10 @@ ignore = ["E501"]
 [tool.mypy]
 python_version = "3.11"
 ignore_missing_imports = true
+# После `python -m build` в verifier/ остаётся build/lib/sia_verifier —
+# дубликат пакета рядом с сорцами; без exclude mypy отказывается
+# работать с директорией вообще. Также пропускаем каталоги сборки.
+exclude = '(^|/)(build|dist)/'
 
 # docker-py ships no type information; treat it as Any instead of an
 # empty module (mypy 2.x otherwise reports every attribute access).

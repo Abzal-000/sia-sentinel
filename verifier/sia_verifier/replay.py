@@ -43,11 +43,26 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
-from .rederive import _dataset_hash
+
+def _dataset_hash(dataset: list[dict[str, Any]]) -> str:
+    """Та же схема, что в sia/sia_verifier (sha256 над join 'prompt|expect').
+
+    Локальная копия сознательно: прямой запуск файла
+    (`python verifier/.../replay.py`) не имеет пакетного контекста и
+    относительный импорт падает; функция — три строки. ПРАВИЛО: при смене
+    схемы в sia/llm_flow.py править здесь и в rederive.py (золотой тест
+    на запись №1 там ловит расхождение).
+    """
+    joined = "\n".join(
+        f"{item.get('prompt', '')}|{item.get('expect_contains', '')}"
+        for item in dataset
+    )
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
 
 
 class ReplayInapplicable(ValueError):
@@ -108,6 +123,18 @@ def compare_replays(
     n = len(labels)
     if n == 0:
         raise ReplayInapplicable("empty dataset")
+
+    # Метки — ключи поэлементного словаря: дубликат в датасете опустил бы
+    # вторую копию в нём (dict перезаписывает), но квота n в знаменателе
+    # нет — сравнение молча было бы на НЕТОМ сетке счета. Отказываемся.
+    seen: set[str] = set()
+    for label in labels:
+        if label in seen:
+            raise ReplayInapplicable(
+                f"duplicate dataset label {label!r} — the failure lists "
+                "cannot tell which copy failed, claiming one would be a guess"
+            )
+        seen.add(label)
 
     # 1. Тот же датасет? Иначе сравнение бессмысленно, а не «не прошло».
     flow_sha = _dataset_hash(dataset)

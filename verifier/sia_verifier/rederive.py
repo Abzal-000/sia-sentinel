@@ -238,38 +238,47 @@ def rederive(
 
     # --- 2. Канон обязательства и якорь Rekor ---
     anchor_ref = (flow.get("anchor_reference") or "").strip()
-    anchor_ok = False
     if check_rekor and anchor_ref.startswith("rekor:"):
+        import re as _re
+
         parts = anchor_ref.split(":")
         uuid, index = parts[1], parts[2]
-        # канон обязательства строится ЛОКАЛЬНО (см. _commitment_from_flow):
-        # занулить reference, канонизировать sort_keys+compact
-        commitment = _commitment_from_flow(flow)
-        commitment["anchor_reference"] = None
-        local_sha512 = hashlib.sha512(_canon(commitment)).hexdigest()
-
-        ok, remote_digest, detail, log_index = _rekor_digest(uuid)
-        if ok:
-            anchor_ok = remote_digest.lower() == local_sha512
-            index_ok = str(log_index) == str(index)
-            checks["anchor_rekor"] = {
-                "uuid": uuid[:16] + "…",
-                "index": index,
-                "rekor_log_index": log_index,
-                "index_match": index_ok,
-                "local_sha512_of_null_reference_commitment": local_sha512,
-                "rekor_entry_digest": remote_digest,
-                "digest_match": anchor_ok,
-            }
-            if not anchor_ok:
-                failures.append("MISMATCH anchor: sha512(canonical commitment with anchor_reference=null) != Rekor entry digest")
-            if not index_ok:
-                failures.append(f"MISMATCH anchor index: flow says {index}, Rekor says {log_index}")
+        # uuid живёт в URL запроса к Rekor — форму валидируем сами
+        # (64 или 80 hex, по форме публичного инстанса; см. валидатор
+        # flow_runner): без этого мусорная ссылка выглядела бы как
+        # «сеть недоступна», а не как невалидный ввод.
+        if not _re.fullmatch(r"[0-9a-f]{64}|[0-9a-f]{80}", uuid):
+            checks["anchor_rekor"] = {"uuid": uuid[:16] + "…", "error": "malformed anchor uuid (not 64/80 hex)"}
+            failures.append(f"BLOCKED anchor check: uuid {uuid!r} is not 64/80 hex")
         else:
-            checks["anchor_rekor"] = {"uuid": uuid[:16] + "…", "error": detail}
-            failures.append(f"BLOCKED anchor check: {detail}")
+            # канон обязательства строится ЛОКАЛЬНО (см. _commitment_from_flow):
+            # занулить reference, канонизировать sort_keys+compact
+            commitment = _commitment_from_flow(flow)
+            commitment["anchor_reference"] = None
+            local_sha512 = hashlib.sha512(_canon(commitment)).hexdigest()
+
+            ok, remote_digest, detail, log_index = _rekor_digest(uuid)
+            if ok:
+                digest_ok = remote_digest.lower() == local_sha512
+                index_ok = str(log_index) == str(index)
+                checks["anchor_rekor"] = {
+                    "uuid": uuid[:16] + "…",
+                    "index": index,
+                    "rekor_log_index": log_index,
+                    "index_match": index_ok,
+                    "local_sha512_of_null_reference_commitment": local_sha512,
+                    "rekor_entry_digest": remote_digest,
+                    "digest_match": digest_ok,
+                }
+                if not digest_ok:
+                    failures.append("MISMATCH anchor: sha512(canonical commitment with anchor_reference=null) != Rekor entry digest")
+                if not index_ok:
+                    failures.append(f"MISMATCH anchor index: flow says {index}, Rekor says {log_index}")
+            else:
+                checks["anchor_rekor"] = {"uuid": uuid[:16] + "…", "error": detail}
+                failures.append(f"BLOCKED anchor check: {detail}")
     else:
-        checks["anchor_rekor"] = {"skipped_reason": "no rekor: reference in flow"}
+        checks["anchor_rekor"] = {"skipped_reason": "no rekor: reference in flow (or --no-rekor)"}
 
     # --- 3. Парность: b/c из меток провалов отчёта ---
     eq = report.get("equivalence") or {}

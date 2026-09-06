@@ -192,6 +192,18 @@ class ReplayInapplicableTestCase(unittest.TestCase):
         with self.assertRaises(ReplayInapplicable):
             compare_replays(record, _report(flow), flow)
 
+    def test_duplicate_labels_refused(self) -> None:
+        # Две строки с одним label — списки провалов не различают, какая
+        # упала; знаменатель доли считал бы n=2, а сравнение — 1 ключ.
+        flow = {"kind": "llm_flow", "dataset": [
+            {"label": "dup", "prompt": "q1", "expect_contains": "ANSWER=1"},
+            {"label": "dup", "prompt": "q2", "expect_contains": "ANSWER=2"},
+        ]}
+        record = _report(flow)
+        with self.assertRaises(ReplayInapplicable) as ctx:
+            compare_replays(record, _report(flow), flow)
+        self.assertIn("duplicate", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

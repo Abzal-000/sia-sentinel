@@ -37,11 +37,11 @@ jobs:
 
     - name: Lint with ruff (full config)
       run: |
-        ruff check sia/ sentinel/ tests/
+        ruff check sia/ sentinel/ tests/ sdk/ verifier/
 
     - name: Type check with mypy
       run: |
-        mypy sia/ sentinel/
+        mypy sia/ sentinel/ verifier/
 
     - name: Run test suite
       run: |
