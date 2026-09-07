@@ -14,8 +14,7 @@
 
 ## Что понадобится
 
-- Python 3.9+ и `pip install sia-verifier` (после публикации пакета; до неё —
-  `pip install ./verifier` из клона репозитория)
+- Python 3.9+ и `pip install sia-verifier` (опубликован на PyPI, версия 1.3.0)
 - Артефакты записи: `artifacts/record1/`, `flows/beacon.json`,
   `receipts/registry.jsonl`, `receipts/checkpoints.jsonl`
   (в репозитории SIA Sentinel; после публичного деплоя — скачиваются с сайта)

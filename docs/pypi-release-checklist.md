@@ -1,11 +1,16 @@
-# Публикация sia-verifier 1.3.0 на PyPI — пошаговая инструкция
+# Публикация sia-verifier 1.3.0 на PyPI — ✅ ВЫПОЛНЕНО 2026-09-06
 
-Статус: пакет **собран и проверен** (2026-09-05): wheel + sdist лежат в
-`verifier/dist/`, чистая установка в изолированный venv работает, все четыре
-console-скрипта (`sia-verifier`, `sia-rederive`, `sia-replay`, `sia-holdout`)
-прогнаны на живых артефактах записи №1 (VALID / REDERIVED YES / replay
-WITHIN TOLERANCE на самосравнении / holdout OK). Остался сам аплоад —
-он требует аккаунта оператора, поэтому здесь шаги.
+**Статус: ОПУБЛИКОВАНО.** `pip install sia-verifier` работает для любого
+человека; подтверждено установкой из чистого venv и верификацией записи №1
+(`VERDICT: VALID`), метаданные живые: pypi.org/pypi/sia-verifier/json →
+version 1.3.0, wheel + sdist на месте. Раздел ниже оставлен как протокол
+проведённой процедуры; правила версий (в конце) — действующие.
+
+Протокол (2026-09-06, фактический): аккаунт + 2FA → API-токен (в менеджер
+паролей) → `twine upload dist/*` из PowerShell (формат «Enter your API
+token», токен целиком) → проверка в чистом venv
+(`pip install sia-verifier` → `sia-verifier attestation.json --chain
+registry.jsonl --checkpoint checkpoints.jsonl` → VERDICT: VALID).
 
 ## Что уже сделано (не повторять)
 

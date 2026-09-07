@@ -24,8 +24,6 @@ pip install sia-verifier
 `sia-replay` (сравнение независимого повторного прогона с записью —
 исполняет задекларированный `replay_tolerance`; см. раздел 4 там же) и
 `sia-holdout` (инструмент аудитора holdout, `docs/holdout-design.md`).
-До публикации на PyPI — установка из репозитория:
-`pip install ./verifier`.
 
 ## Шаг 1. Запустите верификатор
 
