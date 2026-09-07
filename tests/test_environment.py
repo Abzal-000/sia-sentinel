@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 
 class HeavyDependenciesImportTestCase(unittest.TestCase):
@@ -27,6 +28,26 @@ class HeavyDependenciesImportTestCase(unittest.TestCase):
     def test_docker_sdk_imports(self) -> None:
         # SandboxExecutor; untyped-пакет, но отсутствие ломает код-путь CLI
         import docker  # noqa: F401
+
+
+class PackageVersionConsistencyTestCase(unittest.TestCase):
+    """sia.__version__ обязан совпадать с pyproject.toml.
+
+    История: sia/__init__.py нёс 0.1.0 при pyproject 0.7.0 — версии
+    разъехались незаметно, потому что никто не сверял. Один источник
+    правды — pyproject; тест читает его же.
+    """
+
+    def test_sia_version_matches_pyproject(self) -> None:
+        import tomllib
+
+        import sia
+
+        pyproject = (
+            Path(__file__).resolve().parents[1] / "pyproject.toml"
+        ).read_bytes()
+        declared = tomllib.loads(pyproject.decode("utf-8"))["project"]["version"]
+        self.assertEqual(sia.__version__, declared)
 
 
 if __name__ == "__main__":

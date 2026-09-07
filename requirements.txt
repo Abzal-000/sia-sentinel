@@ -1,6 +1,5 @@
 # SIA / SIA Sentinel - runtime dependencies (pinned)
 # Python 3.11+
-alembic==1.19.1
 altair==6.2.2
 annotated-types==0.8.0
 anthropic==0.121.0
@@ -57,7 +56,6 @@ python-dateutil==2.9.0.post0
 python-multipart==0.0.32
 pywin32==312
 PyYAML==6.0.3
-redis==8.1.0
 referencing==0.37.0
 requests==2.34.2
 rich==15.0.0
