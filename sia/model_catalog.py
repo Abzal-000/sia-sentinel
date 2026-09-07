@@ -33,6 +33,19 @@ class ModelSpec:
     # catalog_version — версия каталога/источника цен.
     prices_as_of: Optional[str] = None
     catalog_version: Optional[str] = None
+    # E6 (сквозная проводка): надёжность детерминированного симулятора для
+    # этой модели в simulated-режиме (0..1). None — из профиля. Без поля
+    # simulated-демо автопилота не различали кандидатов по качеству:
+    # скрининг честно выбирал самый дешёвый из одинаково «идеальных»,
+    # и демо выглядело как подгонка. В live-режиме поле игнорируется
+    # (реальная модель отвечает за себя) и в манифест не попадает.
+    simulated_reliability: Optional[float] = None
+    # Профиль симулятора кандидата (verbose/standard/concise). Исторически
+    # кандидаты несли profile, а ModelSpec молча его съедал, подменяя
+    # тирано-выведенным — та же семья ошибок, что и simulated_reliability.
+    # None = вывести из тира (как раньше). Валидация значения — в
+    # spec_to_endpoint против SimulatedLLMClient.PROFILES.
+    profile: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.tier not in TIERS:
@@ -40,6 +53,14 @@ class ModelSpec:
 
         if self.input_token_usd_per_m < 0 or self.output_token_usd_per_m < 0:
             raise ValueError("Pricing must be non-negative")
+
+        if self.simulated_reliability is not None and not (
+            0.0 <= self.simulated_reliability <= 1.0
+        ):
+            raise ValueError(
+                f"simulated_reliability must be within [0, 1], "
+                f"got {self.simulated_reliability!r}"
+            )
 
     @property
     def blended_usd_per_m(self) -> float:
@@ -59,10 +80,31 @@ class ModelSpec:
             "tags": list(self.tags),
             "prices_as_of": self.prices_as_of,
             "catalog_version": self.catalog_version,
+            "simulated_reliability": self.simulated_reliability,
+            "profile": self.profile,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ModelSpec":
+        # ЛУД-ОТКАЗ на неизвестных ключах: молчаливое съедание опечатки —
+        # тот же класс ошибок, что и пропавшее simulated_reliability
+        # (найдено демо 2026-09-06). Известные ключи читаем явно;
+        # посторонние — ошибка ввода, а не «пусть лежит».
+        # modality — легитимный ключ openrouter_catalog.json (информационный,
+        # решений не принимает; в спек не тянем, пока не нужен продукту).
+        known = {
+            "model_name", "input_token_usd_per_m", "output_token_usd_per_m",
+            "provider", "base_url", "api_key_env", "tier", "context_window",
+            "tags", "prices_as_of", "priced_as", "catalog_version",
+            "simulated_reliability", "modality", "profile",
+        }
+        unknown = sorted(set(data) - known)
+
+        if unknown:
+            raise ValueError(
+                f"Unknown catalog entry keys: {unknown} (typo? update the schema first)"
+            )
+
         return cls(
             model_name=data["model_name"],
             input_token_usd_per_m=float(data["input_token_usd_per_m"]),
@@ -75,6 +117,8 @@ class ModelSpec:
             tags=tuple(data.get("tags", ())),
             prices_as_of=data.get("prices_as_of"),
             catalog_version=data.get("catalog_version"),
+            simulated_reliability=data.get("simulated_reliability"),
+            profile=data.get("profile"),
         )
 
 

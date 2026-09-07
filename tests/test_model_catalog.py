@@ -140,3 +140,102 @@ class ModelCatalogTestCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SimulatedReliabilityThreadingTestCase(unittest.TestCase):
+    """E6-проводка: simulated_reliability кандидата доезжает до эндпоинта.
+
+    Дыра найдена полноценным демо: поле передавалось в flow, но ModelSpec
+    его не имел — молча съедалось, simulated-скрининг автопилота не мог
+    различить качество кандидатов и рекомендовал просто самый дешёвый.
+    """
+
+    def test_spec_threads_reliability_into_endpoint(self) -> None:
+        from sia.optimizer import spec_to_endpoint
+
+        spec = ModelSpec(
+            model_name="nano-3b",
+            input_token_usd_per_m=0.05,
+            output_token_usd_per_m=0.20,
+            simulated_reliability=0.55,
+        )
+        self.assertEqual(spec_to_endpoint(spec).simulated_reliability, 0.55)
+
+    def test_spec_without_reliability_keeps_none(self) -> None:
+        from sia.optimizer import spec_to_endpoint
+
+        spec = ModelSpec(model_name="x", input_token_usd_per_m=1, output_token_usd_per_m=1)
+        self.assertIsNone(spec_to_endpoint(spec).simulated_reliability)
+
+    def test_reliability_out_of_range_refused(self) -> None:
+        with self.assertRaises(ValueError):
+            ModelSpec(
+                model_name="x", input_token_usd_per_m=1,
+                output_token_usd_per_m=1, simulated_reliability=1.5,
+            )
+
+    def test_roundtrip_preserves_reliability(self) -> None:
+        spec = ModelSpec(
+            model_name="x", input_token_usd_per_m=1,
+            output_token_usd_per_m=1, simulated_reliability=0.7,
+        )
+        restored = ModelSpec.from_dict(spec.to_dict())
+        self.assertEqual(restored.simulated_reliability, 0.7)
+
+
+class UnknownKeysRefusedTestCase(unittest.TestCase):
+    """Луд-отказ на посторонних ключах каталога: опечатка = ошибка ввода,
+    не молчаливое съедание (класс ошибок, найденный демо через пропавшее
+    simulated_reliability)."""
+
+    def test_unknown_key_refused_loudly(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            ModelSpec.from_dict({
+                "model_name": "x", "input_token_usd_per_m": 1,
+                "output_token_usd_per_m": 1, "simulated_reliablity": 0.5,  # опечатка
+            })
+        self.assertIn("simulated_reliablity", str(ctx.exception))
+
+    def test_all_known_keys_accepted(self) -> None:
+        spec = ModelSpec.from_dict({
+            "model_name": "x", "input_token_usd_per_m": 1,
+            "output_token_usd_per_m": 1, "provider": "p", "base_url": None,
+            "api_key_env": "K", "tier": "mid", "context_window": 8192,
+            "tags": ["a"], "prices_as_of": "2026-09-06",
+            "catalog_version": "r1", "simulated_reliability": 0.5,
+        })
+        self.assertEqual(spec.simulated_reliability, 0.5)
+
+
+class ProfileThreadingTestCase(unittest.TestCase):
+    """profile кандидата доезжает до эндпоинта (раньше молча съедался
+    в пользу тирано-выведенного)."""
+
+    def test_explicit_profile_wins_over_tier(self) -> None:
+        from sia.optimizer import spec_to_endpoint
+
+        spec = ModelSpec(
+            model_name="small", input_token_usd_per_m=0.1,
+            output_token_usd_per_m=0.4, tier="premium",
+            profile="concise",  # не то, что вывел бы premium-тир
+        )
+        self.assertEqual(spec_to_endpoint(spec).profile, "concise")
+
+    def test_profile_none_falls_back_to_tier(self) -> None:
+        from sia.optimizer import spec_to_endpoint
+
+        spec = ModelSpec(
+            model_name="small", input_token_usd_per_m=0.1,
+            output_token_usd_per_m=0.4, tier="premium",
+        )
+        self.assertEqual(spec_to_endpoint(spec).profile, "verbose")
+
+    def test_unknown_profile_refused(self) -> None:
+        from sia.optimizer import spec_to_endpoint
+
+        spec = ModelSpec(
+            model_name="x", input_token_usd_per_m=1,
+            output_token_usd_per_m=1, profile="chatty",
+        )
+        with self.assertRaises(ValueError):
+            spec_to_endpoint(spec)

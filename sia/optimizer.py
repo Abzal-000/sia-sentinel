@@ -31,6 +31,7 @@ from .llm_flow import (
     FlowUsage,
     LLMEndpointConfig,
     LLMFlowAuditor,
+    SimulatedLLMClient,
 )
 from .model_catalog import ModelSpec
 from .statistics import holm_bonferroni
@@ -52,6 +53,16 @@ def spec_to_endpoint(spec: ModelSpec) -> LLMEndpointConfig:
         spec.tier, "standard"
     )
 
+    # Явный profile кандидата сильнее тирано-выведенного (исторически
+    # поле молча съедалось); значение валидируем против профилей симулятора.
+    if spec.profile is not None:
+        if spec.profile not in SimulatedLLMClient.PROFILES:
+            raise ValueError(
+                f"Unknown profile for candidate {spec.model_name!r}: "
+                f"{spec.profile!r} (expected one of {sorted(SimulatedLLMClient.PROFILES)})"
+            )
+        simulated_profile = spec.profile
+
     return LLMEndpointConfig(
         model_name=spec.model_name,
         input_token_usd_per_m=spec.input_token_usd_per_m,
@@ -59,6 +70,11 @@ def spec_to_endpoint(spec: ModelSpec) -> LLMEndpointConfig:
         base_url=spec.base_url,
         api_key=api_key,
         profile=simulated_profile,
+        # E6: заявленная надёжность симулятора кандидата доезжает до
+        # эндпоинта (раньше молча съедалась — simulated-скрининг не мог
+        # различить качество кандидатов и рекомендовал просто самый
+        # дешёвый из «идеальных»).
+        simulated_reliability=spec.simulated_reliability,
         prices_as_of=spec.prices_as_of,
         catalog_version=spec.catalog_version,
     )
