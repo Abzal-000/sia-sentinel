@@ -81,7 +81,9 @@ credentials/
 demo_credentials/
 
 # Generated audit/benchmark artifacts
-artifacts/
+artifacts/*
+!artifacts/record1/
+!artifacts/demo-live/
 
 # Anchored checkpoints (runtime staging for external sync)
 anchors/

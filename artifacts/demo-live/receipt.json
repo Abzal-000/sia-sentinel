@@ -1,0 +1,147 @@
+{
+ "registry_id": "66adde844f6f41d2b458ee6b5c1ff350",
+ "receipt": {
+  "receipt_id": "a47a99c86ff8bdec19934d0c3721ec62ce23e50277c591fdcd94a8acddad107f",
+  "evidence_id": "audit-live-demo-gsm8k40-gpt-oss-120b-vs-20b",
+  "code_hash": "c3891f2f49b21def5c6b0b94bc6f9661e69727825a45ba1f694183b1f9b591eb",
+  "safety_approved": true,
+  "trust_level": "JUNIOR",
+  "timestamp": 1788777533.193346,
+  "nonce": "e7924fee3c154c949292a18e4b6f739e9de81d6f7a618b1f782a6c3db3a2b3ff",
+  "signature": "eeJXi8odjZgwKtzp6TaVkdu9tpggar2+7dk+FFqvN0bwjmj/y5qY0CqBpTiZU8j/Tc14OxdlWwYpgBKb0vIsBA==",
+  "manifest": {
+   "protocol": "proof-of-savings-llm/1",
+   "created": "2026-09-07T10:38:53.193346+00:00",
+   "mode": "live",
+   "environment": {
+    "python": "3.11.15"
+   },
+   "dataset_sha256": "85f14bf3a909993a901944fed837075166f8beb38d483932bf80ba6ca4cdf090",
+   "dataset_size": 40,
+   "repetitions": 1,
+   "old_endpoint": {
+    "model_name": "openai/gpt-oss-120b",
+    "input_token_usd_per_m": 0.15,
+    "output_token_usd_per_m": 0.6,
+    "base_url": "https://api.groq.com/openai/v1",
+    "temperature": 0.0,
+    "reasoning_effort": "low",
+    "profile": "standard",
+    "seed": 42,
+    "simulated_reliability": null,
+    "prices_as_of": "2026-08-26",
+    "catalog_version": "groq-2026-08-26-r1",
+    "price_source_url": "https://openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints",
+    "priced_model_name": "openai/gpt-oss-120b",
+    "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.15/0.60 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
+   },
+   "new_endpoint": {
+    "model_name": "openai/gpt-oss-20b",
+    "input_token_usd_per_m": 0.075,
+    "output_token_usd_per_m": 0.3,
+    "base_url": "https://api.groq.com/openai/v1",
+    "temperature": 0.0,
+    "reasoning_effort": "low",
+    "profile": "standard",
+    "seed": 42,
+    "simulated_reliability": null,
+    "prices_as_of": "2026-08-26",
+    "catalog_version": "groq-2026-08-26-r1",
+    "price_source_url": "https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints",
+    "priced_model_name": "openai/gpt-oss-20b",
+    "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.075/0.30 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
+   },
+   "served_endpoints": {
+    "old": {
+     "model_names": [
+      "openai/gpt-oss-120b"
+     ],
+     "system_fingerprints": [
+      "fp_02b0d31eca",
+      "fp_0adba2bb92",
+      "fp_19b184c447",
+      "fp_3166198c1d",
+      "fp_47082602e2",
+      "fp_4727af4560",
+      "fp_4a19b1544c",
+      "fp_4b2f03d631",
+      "fp_5082008e34",
+      "fp_5a93aea882",
+      "fp_5d041d5b40",
+      "fp_60e4b492db",
+      "fp_626f3fc5e0",
+      "fp_6c36ac20de",
+      "fp_6dedd2be22",
+      "fp_77b12279f9",
+      "fp_803c0ba83d",
+      "fp_84bf0227ec",
+      "fp_90620edd96",
+      "fp_9241e9962b",
+      "fp_93703442d9",
+      "fp_9d1f936695",
+      "fp_bb691ea66b",
+      "fp_c15aa9c1b7",
+      "fp_c652c0ffaa",
+      "fp_c868cf1eaa",
+      "fp_df9620fe21",
+      "fp_e10890e4b9",
+      "fp_e5b4e54fbb",
+      "fp_f73454f048"
+     ],
+     "model_name_coverage": {
+      "reported": 40,
+      "total": 40
+     },
+     "fingerprint_coverage": {
+      "reported": 40,
+      "total": 40
+     }
+    },
+    "new": {
+     "model_names": [
+      "openai/gpt-oss-20b"
+     ],
+     "system_fingerprints": [
+      "fp_1074f9ce08",
+      "fp_1c0f5282a2",
+      "fp_3023a70d60",
+      "fp_334cc21c60",
+      "fp_37c9245f64",
+      "fp_4f7e7dc26e",
+      "fp_565badff47",
+      "fp_639a5351c8",
+      "fp_66891002f6",
+      "fp_66f3850a1a",
+      "fp_75c733514d",
+      "fp_7d448090ba",
+      "fp_80501ff3a1",
+      "fp_84bb35977d",
+      "fp_851252edc2",
+      "fp_8e23cedc90",
+      "fp_92d51d08e5",
+      "fp_a12402de73",
+      "fp_a4315eb300",
+      "fp_a8c584dda7",
+      "fp_c5a89987dc",
+      "fp_c9afb2bdb4",
+      "fp_d6de37e6be",
+      "fp_e23fc997ca",
+      "fp_e2cb7a84ec",
+      "fp_e594c51153",
+      "fp_e99e93f2ac"
+     ],
+     "model_name_coverage": {
+      "reported": 40,
+      "total": 40
+     },
+     "fingerprint_coverage": {
+      "reported": 40,
+      "total": 40
+     }
+    }
+   },
+   "candidate_selected_by": "user"
+  },
+  "kid": "72e9d42116a993bd"
+ }
+}
