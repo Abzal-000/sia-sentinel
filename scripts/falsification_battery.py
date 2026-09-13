@@ -141,6 +141,33 @@ def falsify_checkpoint(work: Path) -> None:
         fake[field] = value
         check(f"F3.{field}", f"checkpoint {field} tamper", not verify_checkpoint(fake, key))
 
+    # F3.4: ЖУРНАЛ чекпойнтов — подмена ПЕРВОГО снимка при валидном последнем.
+    # Проверяется путь CLI целиком: журнал не слабее своего худшего элемента
+    # (semantics введена 2026-09-13 вместе со вторым чекпойнтом seq=4).
+    lines = (REPO_ROOT / "receipts" / "checkpoints.jsonl").read_text(encoding="utf-8").splitlines()
+    if len(lines) >= 2:
+        fake_first = json.loads(lines[0])
+        fake_first["head_hash"] = "cc" * 32
+        journal = work / "cp_journal_forged.jsonl"
+        journal.write_text(
+            json.dumps(fake_first) + "\n" + lines[1] + "\n", encoding="utf-8"
+        )
+        import subprocess
+        import sys as _sys
+
+        r = subprocess.run(
+            [_sys.executable, "-m", "sia_verifier",
+             str(REPO_ROOT / "artifacts" / "record1" / "attestation.json"),
+             "--checkpoint", str(journal)],
+            capture_output=True, text=True, cwd=str(REPO_ROOT / "verifier"),
+        )
+        caught = r.returncode == 1 and "INVALID" in r.stdout
+        check("F3.journal-first-forged", "forged FIRST snapshot in journal rejected", caught)
+    else:
+        # Один снимок в журнале: кейс не применим сегодня, но молчать об
+        # этом — способ не заметить, когда он станет применимым.
+        print("  [F3.journal-first-forged] SKIPPED: journal has a single snapshot")
+
 
 # === F4: rederive =============================================================
 
