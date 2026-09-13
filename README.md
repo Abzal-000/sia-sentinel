@@ -165,13 +165,13 @@ An outsider re-derives the verdict from the published artifacts alone —
 no trust in the auditor, no network except the public Rekor log:
 
 ```bash
-# 1. Signature, chain, checkpoint:
-./venv/Scripts/python.exe verifier/sia_verifier/__main__.py \
-  artifacts/record1/attestation.json \
+# 1. Signature, chain, checkpoint (PyPI package, single dependency: cryptography):
+pip install sia-verifier
+sia-verifier artifacts/record1/attestation.json \
   --chain receipts/registry.jsonl --checkpoint receipts/checkpoints.jsonl
 # 2. Re-derive the verdict itself (b/c, MOVER/McNemar, MDD, savings,
 #    Rekor anchor digest, report→signature binding):
-./venv/Scripts/python.exe verifier/sia_verifier/rederive.py
+sia-rederive
 ```
 
 Walkthrough with all eight checks explained:
@@ -316,7 +316,7 @@ sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, web
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
 docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design
-tests/          666 tests (unittest)
+tests/          686 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
@@ -325,7 +325,7 @@ audit_cli.py    CLI: audit / optimize / sign / verify
 
 Prototype-stage, fully working core: the first publicly anchored record
 (beacon, Groq, 50.5% verified savings, non-inferior verdict — see the
-Record №1 section above) plus 674 tests covering the audit engine, ledger,
+Record №1 section above) plus 686 tests covering the audit engine, ledger,
 tenancy, billing, jobs persistence, public attestation network,
 self-service onboarding, the independent verifier (including verdict
 re-derivation and the auditor-side holdout tool), and the SDK. Measured
