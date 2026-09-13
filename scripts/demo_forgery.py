@@ -40,6 +40,9 @@ os.environ.update({
     "JWT_SECRET_KEY": "e" * 64,
     "ENABLE_DEMO_LOGIN": "",
     "PLATFORM_ADMIN_API_KEY": "plat-" + "a" * 40,
+    # Глобальный стор ключей — тоже в tmp (репозиторийный api_keys.json
+    # накопил ключи тестовых прогонов и пропускает бутстрап админа).
+    "API_KEYS_FILE": str(Path(tmp) / "api_keys.json"),
 })
 # Запуск из любого cwd: корень репо в sys.path ДО импорта sentinel
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
