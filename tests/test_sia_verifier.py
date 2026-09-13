@@ -252,6 +252,54 @@ class SiaVerifierTestCase(unittest.TestCase):
     def test_cli_missing_file_exit_two(self) -> None:
         self.assertEqual(verifier_main(["/nonexistent/attestation.json"]), 2)
 
+    def test_cli_checkpoint_jsonl_journal_all_checked(self) -> None:
+        self.registry.create_checkpoint(self.generator)
+        self.registry.create_checkpoint(self.generator)
+        att_path = Path(self._tmp.name) / "attestation.json"
+        att_path.write_text(json.dumps(self.attestation), encoding="utf-8")
+
+        self.assertEqual(
+            verifier_main([
+                str(att_path), "--checkpoint", str(self.registry.checkpoint_file),
+            ]),
+            0,
+        )
+
+    def test_cli_checkpoint_jsonl_forged_snapshot_rejected(self) -> None:
+        # Журнал не слабее своего худшего элемента: подмена ПЕРВОГО снимка
+        # при валидном последнем обязана ронять вердикт всего файла.
+        self.registry.create_checkpoint(self.generator)
+        self.registry.create_checkpoint(self.generator)
+        lines = self.registry.checkpoint_file.read_text(encoding="utf-8").splitlines()
+        forged_first = json.loads(lines[0])
+        forged_first["head_hash"] = "f" * 64
+        self.registry.checkpoint_file.write_text(
+            json.dumps(forged_first) + "\n" + lines[1] + "\n", encoding="utf-8"
+        )
+        att_path = Path(self._tmp.name) / "attestation.json"
+        att_path.write_text(json.dumps(self.attestation), encoding="utf-8")
+
+        self.assertEqual(
+            verifier_main([
+                str(att_path), "--checkpoint", str(self.registry.checkpoint_file),
+            ]),
+            1,
+        )
+
+    def test_cli_checkpoint_pretty_json_single_object(self) -> None:
+        checkpoint = self.registry.create_checkpoint(self.generator)
+        att_path = Path(self._tmp.name) / "attestation.json"
+        att_path.write_text(json.dumps(self.attestation), encoding="utf-8")
+        cp_path = Path(self._tmp.name) / "cp_pretty.json"
+        # Pretty-printed многострочный одиночный JSON — прежний формат,
+        # документированный в доке; обязан продолжать приниматься.
+        cp_path.write_text(json.dumps(checkpoint, indent=2), encoding="utf-8")
+
+        self.assertEqual(
+            verifier_main([str(att_path), "--checkpoint", str(cp_path)]),
+            0,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

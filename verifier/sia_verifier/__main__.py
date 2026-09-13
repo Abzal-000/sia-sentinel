@@ -8,7 +8,8 @@
     # Проверить аттестацию + хеш-цепочку журнала
     python -m sia_verifier attestation.json --chain registry.jsonl
 
-    # Проверить подпись чекпоинта
+    # Проверить подпись чекпойнта (одиночный JSON или JSONL-журнал
+    # снимков — проверяются ВСЕ строки, не только последняя)
     python -m sia_verifier attestation.json --checkpoint checkpoint.json
 
 Код выхода: 0 — аттестация валидна, 1 — невалидна, 2 — ошибка ввода.
@@ -37,6 +38,36 @@ def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     return entries
 
 
+def _load_checkpoints(path: Path) -> list[dict[str, Any]]:
+    """Чекпойнт-файл: одиночный JSON-объект или JSONL-журнал снимков.
+
+    Журнал (registry пишет по строке-снимку на каждый чекпойнт) проверяется
+    ЦЕЛИКОМ: подпись каждого снимка должна сойтись. Валидность только
+    последнего снимка означала бы, что подписанную фиксацию середины
+    истории можно подменить безнаказанно — журнал не слабее своего
+    худшего элемента.
+    """
+    text = path.read_text(encoding="utf-8")
+
+    try:
+        loaded = json.loads(text)
+    except json.JSONDecodeError:
+        loaded = None
+
+    if isinstance(loaded, dict):
+        return [loaded]
+
+    if isinstance(loaded, list):
+        entries = loaded
+    else:
+        entries = _load_jsonl(path)
+
+    if not entries or not all(isinstance(entry, dict) for entry in entries):
+        raise ValueError("checkpoint file must contain JSON checkpoint object(s)")
+
+    return entries
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="sia-verifier",
@@ -57,7 +88,7 @@ def main(argv: list[str] | None = None) -> int:
         "--checkpoint",
         type=Path,
         default=None,
-        help="Optional checkpoint JSON to verify against the issuer public key",
+        help="Optional checkpoint JSON or JSONL journal of snapshots to verify against the issuer public key",
     )
     parser.add_argument(
         "--json",
@@ -91,12 +122,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.checkpoint is not None:
         try:
-            checkpoint = _load_json(args.checkpoint)
-        except (OSError, json.JSONDecodeError) as exc:
+            checkpoints = _load_checkpoints(args.checkpoint)
+        except (OSError, json.JSONDecodeError, ValueError) as exc:
             print(f"error: cannot read checkpoint file: {exc}", file=sys.stderr)
             return 2
 
-        result["checkpoint_valid"] = verify_checkpoint(checkpoint, issuer_key)
+        checked = [verify_checkpoint(cp, issuer_key) for cp in checkpoints]
+        result["checkpoint_valid"] = all(checked)
+        result["checkpoint_count"] = len(checked)
 
     overall = verdict.valid
     if "chain" in result:
@@ -124,7 +157,13 @@ def main(argv: list[str] | None = None) -> int:
             if chain.get("contains_attestation") is False:
                 print("chain membership:     attestation NOT FOUND in chain")
         if "checkpoint_valid" in result:
-            print(f"checkpoint signature: {'VALID' if result['checkpoint_valid'] else 'INVALID'}")
+            count = result.get("checkpoint_count", 1)
+
+            if count > 1:
+                status = "VALID" if result["checkpoint_valid"] else "INVALID"
+                print(f"checkpoint signatures: {status} ({count} checked)")
+            else:
+                print(f"checkpoint signature: {'VALID' if result['checkpoint_valid'] else 'INVALID'}")
         for reason in verdict.reasons:
             print(f"  - {reason}")
         print(f"VERDICT: {'VALID' if overall else 'INVALID'}")

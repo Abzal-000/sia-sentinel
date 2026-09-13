@@ -14,7 +14,10 @@
 
 ## Что понадобится
 
-- Python 3.9+ и `pip install sia-verifier` (опубликован на PyPI, версия 1.3.0)
+- Python 3.9+ и `pip install sia-verifier` — **версия 1.3.1+** (журнал
+  чекпойнтов теперь содержит несколько подписанных снимков и проверяется
+  целиком; 1.3.0 на нём честно падает с ошибкой чтения — обновитесь,
+  `pip install --upgrade sia-verifier`)
 - Артефакты записи: `artifacts/record1/`, `flows/beacon.json`,
   `receipts/registry.jsonl`, `receipts/checkpoints.jsonl`
   (в репозитории SIA Sentinel; после публичного деплоя — скачиваются с сайта)
