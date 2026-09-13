@@ -275,14 +275,21 @@ appears immediately after the first receipt — **checked with your own eyes**
 both in `./data/anchors/` and in the external storage:
 
 ```bash
-# cron: anchor every hour + sync the staging dir to external storage
-# with an immutability policy (S3 Object Lock / WORM bucket, public git remote)
-0 * * * * cd /srv/sentinel && docker compose -f docker-compose.prod.yml exec -T sentinel python scripts/anchor_checkpoint.py
+# cron: health-check + auto-anchor coverage gaps + alert a human on the rest,
+# then sync the staging dir to external storage with an immutability policy
+# (S3 Object Lock / WORM bucket, public git remote)
+0 * * * * cd /srv/sentinel && docker compose -f docker-compose.prod.yml exec -T sentinel bash scripts/cron_ledger.sh
 30 * * * * aws s3 sync /srv/sentinel/data/anchors/ s3://sentinel-anchors/ --exact-timestamps
 ```
 
-The script refuses to run without `RECEIPT_SIGNING_KEY` in the environment —
-an ephemeral key would sign checkpoints that no verifier accepts, silently.
+`cron_ledger.sh` runs `ledger_health.py` (chain, key declarations, checkpoint
+signatures, head coverage, Merkle root, anchor file), auto-anchors the current
+head when the only problem is a coverage gap, re-runs the check, and alerts a
+human (deduplicated, optional `ALERT_WEBHOOK_URL`) on anything it must not fix
+by itself — a tampered chain or a bad signature is a human alert, because
+auto-"fixing" those would be concealment. The underlying anchor script still
+refuses to run without `RECEIPT_SIGNING_KEY` in the environment — an ephemeral
+key would sign checkpoints that no verifier accepts, silently.
 `ANCHOR_URL` is an alternative for **unauthenticated** ingest endpoints only
 (it sends no Authorization header); for S3-style buckets use the file
 transport + `aws s3 sync` from the host as above. An auditor then compares
@@ -316,7 +323,7 @@ sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, web
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
 docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design
-tests/          686 tests (unittest)
+tests/          705 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
@@ -325,7 +332,7 @@ audit_cli.py    CLI: audit / optimize / sign / verify
 
 Prototype-stage, fully working core: the first publicly anchored record
 (beacon, Groq, 50.5% verified savings, non-inferior verdict — see the
-Record №1 section above) plus 686 tests covering the audit engine, ledger,
+Record №1 section above) plus 705 tests covering the audit engine, ledger,
 tenancy, billing, jobs persistence, public attestation network,
 self-service onboarding, the independent verifier (including verdict
 re-derivation and the auditor-side holdout tool), and the SDK. Measured
