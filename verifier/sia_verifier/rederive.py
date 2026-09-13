@@ -37,6 +37,12 @@
    шарда (inclusionProof.logIndex). Фолд считается по ВНУТРИШАРДОВОМУ;
    сверка опубликованного anchor_reference идёт против виртуального.
    Взаимная подмена двух индексов — канал подлога, закрытый этой проверкой.
+10. проекция аттестации vs отчёт: claim.savings_ratio/savings_verified
+   аттестации — НЕПОДПИСАННАЯ проекция (подпись покрывает receipt; числа
+   пришиты к подписи через code_hash -> отчёт). Подмена цифры в аттестации
+   под настоящей подписью проходит verify_attestation молча — здесь
+   аттестация обязана повторять отчёт слово в слово. Канал найден
+   питч-демо scripts/demo_forgery.py (2026-09-13).
 
 Формулы не импортируются из sia.statistics НАМЕРЕННО (принцип независимости
 core.py): считаются локально, чтобы ошибка репозиторного кода была видна.
@@ -545,6 +551,37 @@ def rederive(
     }
     if ratio_pub is not None and abs(float(ratio_pub) - savings) > 1e-6:
         failures.append(_fail("savings_ratio", ratio_pub, savings))
+
+    # --- 6b (проверка №10). Проекция аттестации vs отчёт ---
+    # claim.savings_ratio аттестации — НЕПОДПИСАННАЯ проекция (подпись
+    # покрывает receipt; числа пришиты к подписи через code_hash ->
+    # отчёт -> эта проверка). Подмена цифры в аттестации (сохранив
+    # подпись) проходила verify_attestation молча — ловится здесь:
+    # аттестация обязана повторять отчёт слово в слово по тем полям,
+    # которые она публикует. Ровно этот канал подделки (savings 99%
+    # под настоящей подписью) найден питч-демо demo_forgery.py.
+    att_claim = attestation.get("claim") or {}
+    att_ratio = att_claim.get("savings_ratio")
+    checks["attestation_projection"] = {
+        "attestation_savings_ratio": att_ratio,
+        "report_savings_ratio": ratio_pub,
+    }
+    if att_ratio is not None and ratio_pub is not None:
+        if abs(float(att_ratio) - float(ratio_pub)) > 1e-6:
+            failures.append(
+                _fail("attestation claim.savings_ratio vs report", ratio_pub, att_ratio)
+            )
+
+    att_verified = att_claim.get("savings_verified")
+    rep_verified = (report.get("claim") or {}).get("savings_verified")
+    if att_verified is not None and rep_verified is not None:
+        if bool(att_verified) != bool(rep_verified):
+            failures.append(
+                _fail("attestation claim.savings_verified vs report", rep_verified, att_verified)
+            )
+    checks["attestation_projection"]["savings_verified_match"] = (
+        att_verified is None or rep_verified is None or bool(att_verified) == bool(rep_verified)
+    )
 
     # --- 8. Привязка отчёта к подписи квитанции ---
     # Сервер хеширует отчёт так: generate_receipt(code=json.dumps(report,

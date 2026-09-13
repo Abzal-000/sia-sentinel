@@ -25,6 +25,8 @@ os.environ.update({
     "ENABLE_DEMO_LOGIN": "",
     "PLATFORM_ADMIN_API_KEY": "plat-" + "a" * 40,
 })
+# Запуск из любого cwd: корень репо в sys.path ДО импорта sentinel
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import importlib  # noqa: E402
 import sentinel.api as api  # noqa: E402
 importlib.reload(api)

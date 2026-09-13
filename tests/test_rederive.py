@@ -143,7 +143,7 @@ class RederivePipelineTestCase(unittest.TestCase):
         }
         report = {
             "name": "test",
-            "claim": {"savings_ratio": 0.5},
+            "claim": {"savings_ratio": 0.5, "savings_verified": True},
             "usage_old": {"calls": size, "total_cost_usd": 0.02},
             "usage_new": {"calls": size, "total_cost_usd": 0.01},
             "equivalence": {"failed_old": [], "failed_new": ["i1"]},
@@ -218,6 +218,42 @@ class RederivePipelineTestCase(unittest.TestCase):
         attestation, report, flow = self._inputs()
         result = rederive(attestation, report, flow, chain=None, check_rekor=False)
         self.assertFalse(any("attestation-vs-flow" in f for f in result["failures"]))
+
+    def test_forged_attestation_savings_ratio_fails(self) -> None:
+        # Проверка №10: claim.savings_ratio аттестации — неподписанная
+        # проекция. Подмена цифры под НАСТОЯЩЕЙ подписью проходит
+        # verify_attestation молча; rederive обязан сверить проекцию
+        # с отчётом, пришитым к подписи через code_hash. Канал найден
+        # питч-демо demo_forgery.py (2026-09-13).
+        attestation, report, flow = self._inputs()
+        attestation["claim"]["savings_ratio"] = 0.99
+        result = rederive(attestation, report, flow, chain=None, check_rekor=False)
+        self.assertFalse(result["rederived"])
+        self.assertTrue(any(
+            "attestation claim.savings_ratio vs report" in f for f in result["failures"]
+        ))
+
+    def test_forged_attestation_savings_verified_fails(self) -> None:
+        attestation, report, flow = self._inputs()
+        attestation["claim"]["savings_verified"] = not bool(
+            attestation["claim"].get("savings_verified")
+        )
+        result = rederive(attestation, report, flow, chain=None, check_rekor=False)
+        self.assertFalse(result["rederived"])
+        self.assertTrue(any(
+            "attestation claim.savings_verified vs report" in f for f in result["failures"]
+        ))
+
+    def test_honest_projection_passes(self) -> None:
+        attestation, report, flow = self._inputs()
+        result = rederive(attestation, report, flow, chain=None, check_rekor=False)
+        self.assertTrue(result["rederived"])
+        projection = result["checks"].get("attestation_projection", {})
+        self.assertTrue(projection.get("savings_verified_match", True))
+        self.assertEqual(
+            projection.get("attestation_savings_ratio"),
+            projection.get("report_savings_ratio"),
+        )
 
 
 if __name__ == "__main__":
