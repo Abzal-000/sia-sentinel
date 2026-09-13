@@ -9,6 +9,7 @@ from sentinel.cryptographic_receipts import (
     ReceiptGenerator,
 )
 import os
+import sys
 from pathlib import Path
 from typing import Any, Optional
 
@@ -663,6 +664,22 @@ def _run_audit_and_register(
         metadata["paired"] = paired
 
     registry_id = receipt_registry.register(receipt, metadata=metadata)
+
+    # ANCHOR_AFTER_AUDIT=1: успешный аудит сам подписывает чекпойнт головы.
+    # Выключено ПО УМОЛЧАНИЮ: поведение без флага не меняется. Крючок
+    # закрывает класс «запись прожила без фиксации» (запись №2, 6 дней
+    # 2026-09-07..13): до прод-крона cron_ledger.sh новый аудит оставлял
+    # голову непокрытой, и никто не замечал. Ошибка чекпойнта НЕ валит
+    # завершённый аудит (квитанция уже в цепи) — логируется и уходит
+    # дальше; сторож cron'а увидит разрыв покрытия и позовёт человека.
+    if os.getenv("ANCHOR_AFTER_AUDIT", "").strip() in ("1", "true", "yes"):
+        try:
+            receipt_registry.create_checkpoint(receipt_generator)
+        except Exception as exc:  # noqa: BLE001
+            print(
+                f"[anchor-after-audit] checkpoint failed for {registry_id}: {exc}",
+                file=sys.stderr,
+            )
 
     usage_meter.record(
         tenant_id=tenant_id,
