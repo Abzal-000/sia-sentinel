@@ -9,8 +9,13 @@
     python -m sia_verifier attestation.json --chain registry.jsonl
 
     # Проверить подпись чекпойнта (одиночный JSON или JSONL-журнал
-    # снимков — проверяются ВСЕ строки, не только последняя)
-    python -m sia_verifier attestation.json --checkpoint checkpoint.json
+    # снимков — проверяются ВСЕ строки, не только последняя); с --chain
+    # рядом печатается лаг покрытия: записи цепи сверх последнего
+    # чекпойнта неопровержимы цепью, но не зафиксированы подписанным
+    # чекпойнтом — это надо видеть, а не угадывать (запись №2 прожила
+    # 6 дней в таком состоянии молча).
+    python -m sia_verifier attestation.json --chain registry.jsonl \
+        --checkpoint checkpoint.jsonl [--require-coverage]
 
 Код выхода: 0 — аттестация валидна, 1 — невалидна, 2 — ошибка ввода.
 """
@@ -94,6 +99,18 @@ def main(argv: list[str] | None = None) -> int:
         help="Optional checkpoint JSON or JSONL journal of snapshots to verify against the issuer public key",
     )
     parser.add_argument(
+        "--require-coverage",
+        action="store_true",
+        help=(
+            "Treat checkpoint coverage as a gate: the chain head must not "
+            "extend beyond the latest signed checkpoint. Without the flag "
+            "a lag is reported as an advisory (the chain legitimately grows "
+            "between scheduled checkpoints); with it, an uncovered head "
+            "fails the verdict. For production cron and 'record closed' "
+            "rituals."
+        ),
+    )
+    parser.add_argument(
         "--json",
         action="store_true",
         help="Print the verdict as JSON instead of human-readable text",
@@ -133,6 +150,26 @@ def main(argv: list[str] | None = None) -> int:
         checked = [verify_checkpoint(cp, issuer_key) for cp in checkpoints]
         result["checkpoint_valid"] = all(checked)
         result["checkpoint_count"] = len(checked)
+        # Максимальный подписанный seq среди ПРОВЕРЕННЫХ снимков: покрытие
+        # измеряется валидными фиксациями, а не количеством строк.
+        result["checkpoint_max_seq"] = max(
+            (int(cp.get("seq") or 0) for cp in checkpoints), default=0
+        )
+
+    # Лаг покрытия: записи цепи сверх последнего подписанного чекпойнта.
+    # Совет по умолчанию (цепь легитимно растёт между чекпойнтами),
+    # ворота при --require-coverage.
+    if args.chain is not None and "checkpoint_valid" in result:
+        head_seq = max((e.get("seq") or 0) for e in entries)
+        cp_seq = result.get("checkpoint_max_seq") or 0
+        lag = head_seq - cp_seq if head_seq > cp_seq else 0
+        result["checkpoint_lag"] = lag
+
+        if lag > 0:
+            result["coverage_advisory"] = (
+                f"{lag} chain entry(ies) beyond the latest signed checkpoint "
+                f"(head seq={head_seq}, checkpoint seq={cp_seq})"
+            )
 
     overall = verdict.valid
     if "chain" in result:
@@ -145,6 +182,10 @@ def main(argv: list[str] | None = None) -> int:
             )
     if "checkpoint_valid" in result:
         overall = overall and result["checkpoint_valid"]
+
+    if args.require_coverage and result.get("checkpoint_lag", 0) > 0:
+        overall = False
+
 
     if args.json:
         result["valid"] = overall
@@ -167,6 +208,15 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"checkpoint signatures: {status} ({count} checked)")
             else:
                 print(f"checkpoint signature: {'VALID' if result['checkpoint_valid'] else 'INVALID'}")
+
+        if result.get("checkpoint_lag", 0) > 0:
+            note = (
+                "coverage gap (GATE FAILED)"
+                if args.require_coverage
+                else "coverage gap (advisory — chain grows between checkpoints)"
+            )
+            print(f"checkpoint coverage:  {result['checkpoint_lag']} entry(ies) beyond "
+                  f"the latest signed checkpoint — {note}")
         for reason in verdict.reasons:
             print(f"  - {reason}")
         print(f"VERDICT: {'VALID' if overall else 'INVALID'}")

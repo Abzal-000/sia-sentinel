@@ -144,17 +144,22 @@ def falsify_checkpoint(work: Path) -> None:
     # F3.4: ЖУРНАЛ чекпойнтов — подмена ПЕРВОГО снимка при валидном последнем.
     # Проверяется путь CLI целиком: журнал не слабее своего худшего элемента
     # (semantics введена 2026-09-13 вместе со вторым чекпойнтом seq=4).
+    # F3.5: СТАРЕЛЫЙ чекпойнт + --require-coverage — голова цепи выше
+    # последней подписанной фиксации обязана проваливать вердикт;
+    # реконструкция реального состояния 2026-09-07..13 (запись №2 жила
+    # без чекпойнта, а верификатор молча говорил VALID).
     lines = (REPO_ROOT / "receipts" / "checkpoints.jsonl").read_text(encoding="utf-8").splitlines()
+
     if len(lines) >= 2:
+        import subprocess
+        import sys as _sys
+
         fake_first = json.loads(lines[0])
         fake_first["head_hash"] = "cc" * 32
         journal = work / "cp_journal_forged.jsonl"
         journal.write_text(
             json.dumps(fake_first) + "\n" + lines[1] + "\n", encoding="utf-8"
         )
-        import subprocess
-        import sys as _sys
-
         r = subprocess.run(
             [_sys.executable, "-m", "sia_verifier",
              str(REPO_ROOT / "artifacts" / "record1" / "attestation.json"),
@@ -163,10 +168,27 @@ def falsify_checkpoint(work: Path) -> None:
         )
         caught = r.returncode == 1 and "INVALID" in r.stdout
         check("F3.journal-first-forged", "forged FIRST snapshot in journal rejected", caught)
+
+        stale_journal = work / "cp_stale.jsonl"
+        stale_journal.write_text(lines[0] + "\n", encoding="utf-8")
+        r = subprocess.run(
+            [_sys.executable, "-m", "sia_verifier",
+             str(REPO_ROOT / "artifacts" / "record1" / "attestation.json"),
+             "--chain", str(REPO_ROOT / "receipts" / "registry.jsonl"),
+             "--checkpoint", str(stale_journal), "--require-coverage"],
+            capture_output=True, text=True, cwd=str(REPO_ROOT / "verifier"),
+        )
+        caught = r.returncode == 1 and "INVALID" in r.stdout
+        check(
+            "F3.stale-checkpoint-gate",
+            "stale checkpoint + --require-coverage caught",
+            caught,
+        )
     else:
-        # Один снимок в журнале: кейс не применим сегодня, но молчать об
-        # этом — способ не заметить, когда он станет применимым.
+        # Один снимок в журнале: кейсы не применимы сегодня, но молчать об
+        # этом — способ не заметить, когда они станут применимымы.
         print("  [F3.journal-first-forged] SKIPPED: journal has a single snapshot")
+        print("  [F3.stale-checkpoint-gate] SKIPPED: need a multi-snapshot journal")
 
 
 # === F4: rederive =============================================================

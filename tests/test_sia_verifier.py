@@ -300,6 +300,70 @@ class SiaVerifierTestCase(unittest.TestCase):
             0,
         )
 
+    def test_cli_coverage_lag_is_advisory_by_default(self) -> None:
+        # Лаг покрытия = 1 (голова seq=2, чекпойнт seq=1): по умолчанию
+        # вердикт VALID + видимый advisory — молчаливый VALID при
+        # непокрытой голове был реальной дырой наблюдаемости.
+        self.registry.register(
+            self.generator.generate_receipt(
+                evidence_id="audit-second", code="y",
+                safety_approved=True, trust_level="JUNIOR",
+            )
+        )
+        # журнал с чекпойнтом seq=1: берём снапшот до второй записи нельзя,
+        # поэтому подписываем ГОВОРЯЩИЙ чекпойнт на старой голове: создаём
+        # чекпойнт СЕЙЧАС (seq=2), затем регистрируем третью запись —
+        # лаг появится у ПОСЛЕДНЕЙ головы.
+        self.registry.create_checkpoint(self.generator)
+        self.registry.register(
+            self.generator.generate_receipt(
+                evidence_id="audit-third", code="z",
+                safety_approved=True, trust_level="JUNIOR",
+            )
+        )
+        att_path = Path(self._tmp.name) / "attestation.json"
+        att_path.write_text(json.dumps(self.attestation), encoding="utf-8")
+        chain_path = Path(self._tmp.name) / "registry.jsonl"
+        entries = self.registry._load_entries()  # noqa: SLF001
+        chain_path.write_text(
+            "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+        )
+
+        self.assertEqual(
+            verifier_main([
+                str(att_path), "--chain", str(chain_path),
+                "--checkpoint", str(self.registry.checkpoint_file),
+            ]),
+            0,
+        )
+
+    def test_cli_require_coverage_gate_fails_on_lag(self) -> None:
+        # Тот же лаг, но с --require-coverage: вердикт INVALID, exit 1 —
+        # ворота для прод-крона и ритуала «запись закрыта».
+        self.registry.create_checkpoint(self.generator)
+        self.registry.register(
+            self.generator.generate_receipt(
+                evidence_id="audit-second", code="y",
+                safety_approved=True, trust_level="JUNIOR",
+            )
+        )
+        att_path = Path(self._tmp.name) / "attestation.json"
+        att_path.write_text(json.dumps(self.attestation), encoding="utf-8")
+        chain_path = Path(self._tmp.name) / "registry.jsonl"
+        entries = self.registry._load_entries()  # noqa: SLF001
+        chain_path.write_text(
+            "\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8"
+        )
+
+        self.assertEqual(
+            verifier_main([
+                str(att_path), "--chain", str(chain_path),
+                "--checkpoint", str(self.registry.checkpoint_file),
+                "--require-coverage",
+            ]),
+            1,
+        )
+
     def test_cli_checkpoint_bom_prefixed_journal(self) -> None:
         # PowerShell `>`-редирект и notepad пишут UTF-8 BOM; соседние
         # инструменты пакета читают utf-8-sig — CLI не должен выделяться
