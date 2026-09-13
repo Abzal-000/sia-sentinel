@@ -25,6 +25,18 @@
 7. леджер: предрегистрация (seq=1) предшествует квитанции (seq=2), поля совпадают
 8. привязка отчёта к подписи: sha256(report) == receipt.code_hash — отчёт,
    из которого перевыводится вердикт, сам пришит к подписи квитанции
+9. inclusion-proof Rekor: RFC 6962-фолд (leaf = sha256(0x00||body),
+   внутренняя цепь по битам индекса, border-цепь правых) от leaf к корню
+   == RootHash из proof, который одновременно равен корню подписанного
+   checkpoint в том же proof. Формулы — порт transparency-dev/merkle
+   proof/verify.go (ChainInner/ChainBorderRight/innerProofSize);
+   фолд ЛОКАЛЬНЫЙ: тело ответа не принимается на слово ни в какой части.
+
+   ВАЖНО для шардированного публичного инстанса: у записи ДВА индекса —
+   виртуальный (entry.logIndex, сквозной по всем шардам) и индекс внутри
+   шарда (inclusionProof.logIndex). Фолд считается по ВНУТРИШАРДОВОМУ;
+   сверка опубликованного anchor_reference идёт против виртуального.
+   Взаимная подмена двух индексов — канал подлога, закрытый этой проверкой.
 
 Формулы не импортируются из sia.statistics НАМЕРЕННО (принцип независимости
 core.py): считаются локально, чтобы ошибка репозиторного кода была видна.
@@ -211,6 +223,107 @@ def _rekor_digest(uuid: str) -> tuple[bool, str, str, Any]:
         return False, "", f"rekor entry parse failed: {exc}", log_index
 
 
+def _rekor_full_entry(uuid: str) -> dict[str, Any] | None:
+    """Живая запись Rekor целиком (body + verification.inclusionProof)."""
+    url = f"https://rekor.sigstore.dev/api/v1/log/entries/{uuid}"
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=30) as response:
+            data = json.load(response)
+        return (data.get(uuid) if isinstance(data, dict) else None) or {}
+    except Exception:
+        return None
+
+
+def _verify_rekor_inclusion(entry: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
+    """RFC 6962 inclusion-proof записи Rekor — ЛОКАЛЬНЫЙ фолд до корня.
+
+    Проверка №9: тело ответа не принимается на слово. Из entry берутся
+    только body (leaf-байты) и структурные поля proof'а; корень
+    ВЫЧИСЛЯЕТСЯ фолдом и сверяется с rootHash proof'а И с корнем
+    подписанной checkpoint-строки внутри него. Формулы — порт
+    transparency-dev/merkle proof/verify.go:
+
+      leafHash = sha256(0x00 || body)
+      inner    = bit_length(index ^ (size-1))          # innerProofSize
+      border   = popcount(index >> inner)
+      chainInner: на шаге i при (index>>i)&1==0 — H(seed, h),
+                  иначе H(h, seed)
+      chainBorderRight: seed = H(h, seed) для всех border-хешей
+
+    Возвращает (ok, detail, debug_dict).
+    """
+    verification = entry.get("verification") or {}
+    ip = verification.get("inclusionProof") or {}
+    hashes_hex = ip.get("hashes") or []
+    index = ip.get("logIndex")
+    tree_size = ip.get("treeSize")
+    root_hex = ip.get("rootHash")
+    checkpoint = ip.get("checkpoint") or ""
+
+    if index is None or tree_size is None or not root_hex or not hashes_hex:
+        return False, "inclusion proof fields missing", {"error": "missing fields"}
+
+    try:
+        proof = [bytes.fromhex(h) for h in hashes_hex]
+        root = bytes.fromhex(root_hex)
+        leaf = hashlib.sha256(b"\x00" + base64.b64decode(entry.get("body") or "")).digest()
+        index = int(index)
+        tree_size = int(tree_size)
+    except Exception as exc:
+        return False, f"inclusion proof decode failed: {exc}", {"error": "decode"}
+
+    if index >= tree_size:
+        return False, "log index beyond tree size", {"error": "index >= size"}
+
+    inner = (index ^ (tree_size - 1)).bit_length()
+    border = bin(index >> inner).count("1")
+
+    if len(proof) != inner + border:
+        return (
+            False,
+            f"proof length {len(proof)} != inner {inner} + border {border}",
+            {"inner": inner, "border": border, "got": len(proof)},
+        )
+
+    def _node(left: bytes, right: bytes) -> bytes:
+        return hashlib.sha256(b"\x01" + left + right).digest()
+
+    seed = leaf
+    for i, h in enumerate(proof[:inner]):
+        seed = _node(seed, h) if (index >> i) & 1 == 0 else _node(h, seed)
+    for h in proof[inner:]:
+        seed = _node(h, seed)
+
+    proof_root_ok = seed == root
+
+    # корень подписанного checkpoint в proof — вторая, независимая фиксация
+    # того же корня (строка SignedTreeHead); сверка строкой-в-строку.
+    checkpoint_root_ok = None
+    cp_lines = [line for line in checkpoint.splitlines() if line.strip()]
+    if len(cp_lines) >= 3:
+        try:
+            cp_root = base64.b64decode(cp_lines[2])
+            checkpoint_root_ok = cp_root == root
+        except Exception:
+            checkpoint_root_ok = None
+
+    debug = {
+        "folded_root": seed.hex(),
+        "proof_root": root_hex,
+        "proof_root_match": proof_root_ok,
+        "checkpoint_root_match": checkpoint_root_ok,
+        "inner": inner,
+        "border": border,
+        "shard_index": index,
+        "shard_tree_size": tree_size,
+    }
+
+    ok = proof_root_ok and (checkpoint_root_ok is not False)
+
+    return ok, "folded == proof root == checkpoint root" if ok else "fold mismatch", debug
+
+
 def rederive(
     attestation: dict[str, Any],
     report: dict[str, Any],
@@ -290,6 +403,22 @@ def rederive(
                     failures.append("MISMATCH anchor: sha512(canonical commitment with anchor_reference=null) != Rekor entry digest")
                 if not index_ok:
                     failures.append(f"MISMATCH anchor index: flow says {index}, Rekor says {log_index}")
+
+                # --- Проверка №9: inclusion-proof, локальный фолд ---
+                full_entry = _rekor_full_entry(uuid)
+                if full_entry:
+                    inc_ok, inc_detail, inc_debug = _verify_rekor_inclusion(full_entry)
+                    checks["anchor_rekor"]["inclusion_proof"] = {
+                        "verified": inc_ok,
+                        "detail": inc_detail,
+                        **inc_debug,
+                    }
+                    if not inc_ok:
+                        failures.append(f"MISMATCH anchor inclusion-proof: {inc_detail}")
+                else:
+                    checks["anchor_rekor"]["inclusion_proof"] = {
+                        "skipped_reason": "entry fetch failed (network)"
+                    }
             else:
                 checks["anchor_rekor"] = {"uuid": uuid[:16] + "…", "error": detail}
                 failures.append(f"BLOCKED anchor check: {detail}")
