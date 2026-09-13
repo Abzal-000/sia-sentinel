@@ -26,12 +26,15 @@ from .core import verify_attestation, verify_chain, verify_checkpoint
 
 
 def _load_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    # utf-8-sig: PowerShell `>`-редирект и notepad пишут BOM; соседние
+    # инструменты пакета (rederive/replay/holdout) уже BOM-толерантны, и
+    # файлы постороннего проходят тот же путь.
+    return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
 def _load_jsonl(path: Path) -> list[dict[str, Any]]:
     entries = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in path.read_text(encoding="utf-8-sig").splitlines():
         line = line.strip()
         if line:
             entries.append(json.loads(line))
@@ -47,7 +50,7 @@ def _load_checkpoints(path: Path) -> list[dict[str, Any]]:
     истории можно подменить безнаказанно — журнал не слабее своего
     худшего элемента.
     """
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8-sig")
 
     try:
         loaded = json.loads(text)

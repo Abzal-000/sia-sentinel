@@ -300,6 +300,31 @@ class SiaVerifierTestCase(unittest.TestCase):
             0,
         )
 
+    def test_cli_checkpoint_bom_prefixed_journal(self) -> None:
+        # PowerShell `>`-редирект и notepad пишут UTF-8 BOM; соседние
+        # инструменты пакета читают utf-8-sig — CLI не должен выделяться
+        # отказом там, где rederive/replay/holdout работают.
+        self.registry.create_checkpoint(self.generator)
+        att_path = Path(self._tmp.name) / "attestation.json"
+        att_path.write_text(json.dumps(self.attestation), encoding="utf-8")
+        cp_path = Path(self._tmp.name) / "cp_bom.jsonl"
+        cp_path.write_bytes(
+            b"\xef\xbb\xbf" + self.registry.checkpoint_file.read_bytes()
+        )
+
+        self.assertEqual(
+            verifier_main([str(att_path), "--checkpoint", str(cp_path)]),
+            0,
+        )
+
+    def test_cli_attestation_bom_prefixed(self) -> None:
+        att_path = Path(self._tmp.name) / "attestation_bom.json"
+        att_path.write_bytes(
+            b"\xef\xbb\xbf" + json.dumps(self.attestation).encode("utf-8")
+        )
+
+        self.assertEqual(verifier_main([str(att_path)]), 0)
+
 
 if __name__ == "__main__":
     unittest.main()
