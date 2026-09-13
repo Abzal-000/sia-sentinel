@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import datetime as _dt
 import hashlib
 import json
 import math
@@ -235,6 +236,54 @@ def _rekor_full_entry(uuid: str) -> dict[str, Any] | None:
         return None
 
 
+# Кэш-снапшот живого ответа Rekor для проверки №9 (офлайн-режим).
+# Живой запрос ВСЕГДА предпочитается; снапшот — только fallback при
+# сетевой недоступности, с видимым возрастом verified_at. Снапшот не
+# ослабляет проверку: body внутри снапшота проходит ту же дайджест-сверку
+# (подменённый снапшот валит шаг 2) и тот же локальный фолд inclusion-proof
+# (проверка №9). Он лишь фиксирует, КОГДА последний раз ответ был живым.
+_REKOR_SNAPSHOT_DIR = Path(".cache") / "rekor_snapshots"
+
+
+def _rekor_snapshot_path(uuid: str) -> Path:
+    return _REKOR_SNAPSHOT_DIR / f"{uuid}.json"
+
+
+def _rekor_entry_cached(uuid: str) -> tuple[dict[str, Any] | None, str]:
+    """Живой ответ Rekor, при недоступности сети — timestamped-снапшот.
+
+    Возвращает (entry, source): source = "live" | "snapshot:AGE" | "none".
+    Снапшот пишется только после УСПЕШНОГО живого запроса — кэш не может
+    легитимизировать содержимое, он лишь свидетельствует о моменте проверки.
+    """
+    entry = _rekor_full_entry(uuid)
+
+    if entry and entry.get("body"):
+        try:
+            _REKOR_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+            payload = {"verified_at": _dt.datetime.now(_dt.timezone.utc).isoformat(),
+                       "uuid": uuid, "entry": entry}
+            _rekor_snapshot_path(uuid).write_text(
+                json.dumps(payload), encoding="utf-8")
+        except OSError:
+            pass  # кэш — оптимизация доступности, не обязательство
+        return entry, "live"
+
+    # сеть недоступна или ответ пуст — пробуем снапшот
+    snap = _rekor_snapshot_path(uuid)
+
+    if snap.exists():
+        try:
+            payload = json.loads(snap.read_text(encoding="utf-8"))
+            age_days = (_dt.datetime.now(_dt.timezone.utc)
+                        - _dt.datetime.fromisoformat(payload["verified_at"])).days
+            return payload.get("entry") or {}, f"snapshot:{age_days}d"
+        except (OSError, ValueError, KeyError):
+            return None, "none"
+
+    return None, "none"
+
+
 def _verify_rekor_inclusion(entry: dict[str, Any]) -> tuple[bool, str, dict[str, Any]]:
     """RFC 6962 inclusion-proof записи Rekor — ЛОКАЛЬНЫЙ фолд до корня.
 
@@ -405,19 +454,22 @@ def rederive(
                     failures.append(f"MISMATCH anchor index: flow says {index}, Rekor says {log_index}")
 
                 # --- Проверка №9: inclusion-proof, локальный фолд ---
-                full_entry = _rekor_full_entry(uuid)
+                # Живой ответ предпочителен; при сетевой недоступности —
+                # timestamped-снапшот (возраст виден как source).
+                full_entry, entry_source = _rekor_entry_cached(uuid)
                 if full_entry:
                     inc_ok, inc_detail, inc_debug = _verify_rekor_inclusion(full_entry)
                     checks["anchor_rekor"]["inclusion_proof"] = {
                         "verified": inc_ok,
                         "detail": inc_detail,
+                        "source": entry_source,
                         **inc_debug,
                     }
                     if not inc_ok:
                         failures.append(f"MISMATCH anchor inclusion-proof: {inc_detail}")
                 else:
                     checks["anchor_rekor"]["inclusion_proof"] = {
-                        "skipped_reason": "entry fetch failed (network)"
+                        "skipped_reason": "entry fetch failed (network, no snapshot)"
                     }
             else:
                 checks["anchor_rekor"] = {"uuid": uuid[:16] + "…", "error": detail}
