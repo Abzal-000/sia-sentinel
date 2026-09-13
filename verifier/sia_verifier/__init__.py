@@ -23,7 +23,7 @@ TrustChain. Никаких сетевых вызовов, никакого SDK S
    включение записи в tree head, ``verify_consistency`` — что дерево
    размера N является продолжением дерева размера M.
 
-CLI (v1.3.1)::
+CLI (v1.4.0)::
 
     sia-verifier attestation.json [--chain registry.jsonl] [--checkpoint cp.json]
     sia-rederive  [--artifacts DIR] [--flow F] [--chain C] [--no-rekor]
@@ -58,7 +58,7 @@ from .core import (
     verify_receipt,
 )
 
-__version__ = "1.3.1"
+__version__ = "1.4.0"
 
 __all__ = [
     "ATTESTATION_SPEC",
