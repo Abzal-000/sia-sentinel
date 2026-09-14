@@ -322,7 +322,7 @@ sia/            Audit engine: flows, optimizer, model catalog, Wilson CI
 sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, webhooks
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
-docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design
+docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design, demand validation + outreach drafts
 tests/          709 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
