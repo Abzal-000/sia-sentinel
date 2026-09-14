@@ -299,6 +299,16 @@ live chain head — if it does not extend the anchor, history was rewritten.
 One more day-one rule: do not advertise the deprecated firewall endpoints on
 the public domain — they are off the product surface for a reason.
 
+### Ledger mirror (WORM)
+
+The ledger's append-only history is additionally publishable to a dedicated
+public repository via [`scripts/mirror_ledger.py`](scripts/mirror_ledger.py):
+three gates (local chain must be VALID; the mirror may only ever EXTEND the
+published history — divergence is a human alert, not auto-recovery; only
+trust-bearing paths are staged), exit codes are cron-friendly. Mechanism and
+the remaining operator decision are documented in
+[`docs/ledger-mirror.md`](docs/ledger-mirror.md).
+
 ---
 
 ## Security model
@@ -323,7 +333,7 @@ sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, web
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
 docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design, demand validation + outreach drafts
-tests/          709 tests (unittest)
+tests/          715 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
@@ -332,7 +342,7 @@ audit_cli.py    CLI: audit / optimize / sign / verify
 
 Prototype-stage, fully working core: the first publicly anchored record
 (beacon, Groq, 50.5% verified savings, non-inferior verdict — see the
-Record №1 section above) plus 709 tests covering the audit engine, ledger,
+Record №1 section above) plus 715 tests covering the audit engine, ledger,
 tenancy, billing, jobs persistence, public attestation network,
 self-service onboarding, the independent verifier (including verdict
 re-derivation and the auditor-side holdout tool), and the SDK. Measured
