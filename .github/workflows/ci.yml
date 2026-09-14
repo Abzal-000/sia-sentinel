@@ -58,6 +58,25 @@ jobs:
         python scripts/demo_full.py
         python scripts/demo_forgery.py
 
+    # CI-checkout — это свежий клон: здесь постоянно живёт обещание
+    # «посторонний верифицирует записи сам». Поймано красным 2026-09-14:
+    # receipts/ был в .gitignore — локальная зелень, мёртвый клон.
+    # Сьют-гард ловит отсутствие файлов; этот шаг доказывает, что обе
+    # записи ВЕРИФИЦИРУЮТСЯ в чистом окружении CI. PYTHONPATH вместо
+    # pip-install: проверяем код из этого же checkout, не из PyPI.
+    # --require-coverage: лаг чекпойнта — красный, не advisory.
+    # rederive опущен: его проверка №2 дергает живой Rekor API —
+    # сетевой сервис в CI-гейте остаётся вне зависимости.
+    - name: Verify both public records as a fresh clone would
+      run: |
+        pip install cryptography
+        PYTHONPATH=verifier python -m sia_verifier artifacts/record1/attestation.json \
+          --chain receipts/registry.jsonl \
+          --checkpoint receipts/checkpoints.jsonl --require-coverage
+        PYTHONPATH=verifier python -m sia_verifier artifacts/demo-live/attestation.json \
+          --chain receipts/registry.jsonl \
+          --checkpoint receipts/checkpoints.jsonl --require-coverage
+
   docker:
     needs: test
     runs-on: ubuntu-latest
