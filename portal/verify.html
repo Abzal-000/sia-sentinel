@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Verify it yourself — SIA Sentinel</title>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:2rem auto;max-width:720px;color:#1c2733}pre{background:#f4f6f8;padding:.75rem;border-radius:6px;overflow-x:auto}a{color:#1565c0}</style>
+</head>
+<body>
+<h1>Verify it yourself</h1>
+<p>This showcase is a static export. The real proof does not require trusting us:</p>
+<pre>pip install sia-verifier
+
+sia-verifier attestation.json --chain registry.jsonl \
+  --checkpoint checkpoints.jsonl --require-coverage
+
+sia-rederive</pre>
+<p>The chain, checkpoints and flows are in the repository
+(<code>receipts/</code>, <code>artifacts/</code>, <code>flows/</code>).
+The verifier checks the Ed25519 signature, the hash chain, signed
+checkpoints and the Merkle tree — offline, one dependency
+(<code>cryptography</code>).</p>
+<p><a href="index.html">Back to the registry</a></p>
+</body>
+</html>

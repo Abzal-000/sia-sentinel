@@ -1,0 +1,267 @@
+{
+  "schema_version": "1",
+  "spec": "sia-attestation/1",
+  "attestation_id": "9788a535196a408aa6faf9a1f7d8bdd0",
+  "issued_at": "2026-08-26T12:56:48.577398+00:00",
+  "issuer": {
+    "name": "SIA Sentinel",
+    "public_key": "tqIhnSC/3xVANUtzGLsGmcVqxZ40J1jTiF1QDaQHiyw=",
+    "kid": "72e9d42116a993bd",
+    "algorithm": "Ed25519-SHA256"
+  },
+  "subject": {
+    "flow_name": "beacon-gsm8k450-groq-gpt-oss-120b-vs-gpt-oss-20b",
+    "kind": "llm_flow",
+    "mode": "live"
+  },
+  "claim": {
+    "savings_verified": true,
+    "savings_ratio": 0.505347,
+    "paired": {
+      "non_inferior": true,
+      "delta": 0.05,
+      "mcnemar_p": 0.17956542968749645,
+      "minimum_detectable_difference": 0.04176356661639448,
+      "n_pairs": 450,
+      "b_old_pass_new_fail": 10,
+      "c_old_fail_new_pass": 4,
+      "ci_lower": -0.03232114276651871,
+      "ci_upper": 0.003724573831923964,
+      "declared_limits": "R=1 repetitions per item over n=450 items, both fixed at preregistration; the MDD is what this budget can detect (80% power), not a quality statement. With R=1, per-element flakiness cannot be separated from item difficulty, so the directional replay verifier will have no within-element consistency to check."
+    },
+    "preregistration": {
+      "dataset_sha256": "9579e31bb29b1185f93111b92cebc5aef65ac73c11d727b7cc7ba096cfeeb812",
+      "delta": 0.05,
+      "metric": "expect_contains/digit-anchored",
+      "replay_tolerance": 0.05,
+      "replay_tolerance_rule": "directional-one-sided:toward-claim",
+      "anchor_declaration": "external-anchor",
+      "anchor_reference": "rekor:108e9186e8c5677ab7e31e044477eee82274d4dfe6a099a0ea71483e3de70b79e5344934441f00c8:2601942504"
+    }
+  },
+  "receipt": {
+    "receipt_id": "4f6e4f39a4017a4fee3bb53e20e5fec13e481eca2d915ada1fcf40f2d9fda07b",
+    "evidence_id": "audit-beacon-gsm8k450-groq-gpt-oss-120b-vs-gpt-oss-20b",
+    "code_hash": "5f961bc4245c3de4f3a32025665ab85fb15a3d5b31a0f2575d31d0d7198529b0",
+    "safety_approved": true,
+    "trust_level": "JUNIOR",
+    "timestamp": 1787749008.577398,
+    "nonce": "b2ca46ec8fa51d1c5a7a9c5a7cea79e5a5ff60fc2b06ff65ce7a8044a43e9247",
+    "signature": "oP3Re6hYlfG0bcWOMdO4dU5Ubhu8jHPZPjz7gJp6my9EYNojyyUHlZkOEdZlKSaJvx0AD0Wp3u2QBdvnHD1OBg==",
+    "manifest": {
+      "protocol": "proof-of-savings-llm/1",
+      "created": "2026-08-26T12:56:48.577398+00:00",
+      "mode": "live",
+      "environment": {
+        "python": "3.11.15"
+      },
+      "dataset_sha256": "9579e31bb29b1185f93111b92cebc5aef65ac73c11d727b7cc7ba096cfeeb812",
+      "dataset_size": 450,
+      "repetitions": 1,
+      "old_endpoint": {
+        "model_name": "openai/gpt-oss-120b",
+        "input_token_usd_per_m": 0.15,
+        "output_token_usd_per_m": 0.6,
+        "base_url": "https://api.groq.com/openai/v1",
+        "temperature": 0.0,
+        "reasoning_effort": "low",
+        "profile": "standard",
+        "seed": 42,
+        "simulated_reliability": null,
+        "prices_as_of": "2026-08-26",
+        "catalog_version": "groq-2026-08-26-r1",
+        "price_source_url": "https://openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints",
+        "priced_model_name": "openai/gpt-oss-120b",
+        "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.15/0.60 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-120b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
+      },
+      "new_endpoint": {
+        "model_name": "openai/gpt-oss-20b",
+        "input_token_usd_per_m": 0.075,
+        "output_token_usd_per_m": 0.3,
+        "base_url": "https://api.groq.com/openai/v1",
+        "temperature": 0.0,
+        "reasoning_effort": "low",
+        "profile": "standard",
+        "seed": 42,
+        "simulated_reliability": null,
+        "prices_as_of": "2026-08-26",
+        "catalog_version": "groq-2026-08-26-r1",
+        "price_source_url": "https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints",
+        "priced_model_name": "openai/gpt-oss-20b",
+        "price_basis_note": "Groq serves the endpoint on its free developer tier; the price is Groq's OWN published list rate for that same endpoint (0.075/0.30 per M as of 2026-08-26, source: https://openrouter.ai/api/v1/models/openai/gpt-oss-20b/endpoints). Serving and pricing are the same provider and the same deployment, so unlike a cross-provider price basis there is no quantization or routing gap. Actual spend on the run is zero: this is a counterfactual list-price computation, not an invoice."
+      },
+      "served_endpoints": {
+        "old": {
+          "model_names": [
+            "openai/gpt-oss-120b"
+          ],
+          "system_fingerprints": [
+            "fp_017482bd7f",
+            "fp_02b0d31eca",
+            "fp_068241849b",
+            "fp_0708ac49a5",
+            "fp_0adba2bb92",
+            "fp_19b184c447",
+            "fp_1d982b31b2",
+            "fp_3166198c1d",
+            "fp_4140daa9c2",
+            "fp_4200b3f836",
+            "fp_47082602e2",
+            "fp_4727af4560",
+            "fp_49bfac06f1",
+            "fp_4b2f03d631",
+            "fp_5082008e34",
+            "fp_5781dfb07c",
+            "fp_5a93aea882",
+            "fp_60e4b492db",
+            "fp_626f3fc5e0",
+            "fp_64b2f1c926",
+            "fp_6b677c2caf",
+            "fp_6c36ac20de",
+            "fp_6dedd2be22",
+            "fp_77b12279f9",
+            "fp_803c0ba83d",
+            "fp_84bf0227ec",
+            "fp_854fa9be4c",
+            "fp_8655ddce88",
+            "fp_87b3c396db",
+            "fp_8a618bed98",
+            "fp_8db49de948",
+            "fp_8ea50c0161",
+            "fp_90620edd96",
+            "fp_9241e9962b",
+            "fp_93703442d9",
+            "fp_96d96a151c",
+            "fp_9d1f936695",
+            "fp_b1dd3e7a63",
+            "fp_bb691ea66b",
+            "fp_bc9a6c9b5f",
+            "fp_c15aa9c1b7",
+            "fp_c652c0ffaa",
+            "fp_c800245357",
+            "fp_c868cf1eaa",
+            "fp_ca5edfaab2",
+            "fp_d81b3304b3",
+            "fp_dc4ca88fa4",
+            "fp_dee443f41b",
+            "fp_df9620fe21",
+            "fp_e1a78f200e",
+            "fp_e5b4e54fbb",
+            "fp_f640395b96",
+            "fp_f73454f048",
+            "fp_fe269835c7"
+          ],
+          "model_name_coverage": {
+            "reported": 450,
+            "total": 450
+          },
+          "fingerprint_coverage": {
+            "reported": 450,
+            "total": 450
+          }
+        },
+        "new": {
+          "model_names": [
+            "openai/gpt-oss-20b"
+          ],
+          "system_fingerprints": [
+            "fp_1074f9ce08",
+            "fp_1c0f5282a2",
+            "fp_228717f27c",
+            "fp_24bfb4a850",
+            "fp_2b688e7cc3",
+            "fp_3023a70d60",
+            "fp_334cc21c60",
+            "fp_34cb00738d",
+            "fp_37c9245f64",
+            "fp_3cdd24b83b",
+            "fp_4a35f7bd1b",
+            "fp_4f7e7dc26e",
+            "fp_565badff47",
+            "fp_587d0d67cc",
+            "fp_5979a0e1b7",
+            "fp_63473661d7",
+            "fp_639a5351c8",
+            "fp_66891002f6",
+            "fp_66f3850a1a",
+            "fp_7d448090ba",
+            "fp_80501ff3a1",
+            "fp_84bb35977d",
+            "fp_851252edc2",
+            "fp_8b41efc9a3",
+            "fp_8d13edce1d",
+            "fp_8e23cedc90",
+            "fp_92d51d08e5",
+            "fp_9340e7d14d",
+            "fp_976a85d17a",
+            "fp_996f667773",
+            "fp_99996fee8e",
+            "fp_9b8528b477",
+            "fp_a8c584dda7",
+            "fp_c5a89987dc",
+            "fp_c9afb2bdb4",
+            "fp_d23c14756c",
+            "fp_d3e146e1a5",
+            "fp_d6de37e6be",
+            "fp_e11c8bbf69",
+            "fp_e23fc997ca",
+            "fp_e2cb7a84ec",
+            "fp_e594c51153",
+            "fp_e99e93f2ac",
+            "fp_ef00694abe",
+            "fp_f102a3179c"
+          ],
+          "model_name_coverage": {
+            "reported": 450,
+            "total": 450
+          },
+          "fingerprint_coverage": {
+            "reported": 450,
+            "total": 450
+          }
+        }
+      },
+      "candidate_selected_by": "user",
+      "gate_evidence": {
+        "checked_at": "2026-08-26T12:15:30.520199+00:00",
+        "sides": {
+          "old": {
+            "model_name": "openai/gpt-oss-120b",
+            "alive": true,
+            "latency_sec": 1.43,
+            "out_tokens": 22,
+            "answer_tail": "ANSWER=391",
+            "served_model_name": "openai/gpt-oss-120b",
+            "list_rate_matches_flow": true,
+            "list_rate": {
+              "input": 0.15,
+              "output": 0.6,
+              "provider": "Groq | openai/gpt-oss-120b"
+            }
+          },
+          "new": {
+            "model_name": "openai/gpt-oss-20b",
+            "alive": true,
+            "latency_sec": 0.54,
+            "out_tokens": 21,
+            "answer_tail": "ANSWER=391",
+            "served_model_name": "openai/gpt-oss-20b",
+            "list_rate_matches_flow": true,
+            "list_rate": {
+              "input": 0.075,
+              "output": 0.3,
+              "provider": "Groq | openai/gpt-oss-20b"
+            }
+          }
+        },
+        "prices_checked_at": "2026-08-26T12:15:30.520199+00:00"
+      }
+    },
+    "kid": "72e9d42116a993bd"
+  },
+  "verification": {
+    "receipt_signature_valid": true,
+    "ledger_chain_valid": true,
+    "ledger_entries": 2
+  }
+}
