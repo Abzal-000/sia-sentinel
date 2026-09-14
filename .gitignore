@@ -45,13 +45,22 @@ evidence/
 *.sqlite
 *.sqlite3
 
-# Runtime data (tenants, usage meter, API keys, receipt registry, invoices, webhooks)
+# Runtime data (tenants, usage meter, API keys, invoices, webhooks)
 tenants.json
 usage_events.jsonl
 api_keys.json
 invoices.json
 webhooks.json
-receipts/
+# Ledger history IS the product: the chain, its checkpoints and anchor files
+# are trust-bearing state and live in git (second point of existence).
+# Lock files and anything else in receipts/ stay out.
+receipts/*
+!receipts/registry.jsonl
+!receipts/checkpoints.jsonl
+
+# Anchored checkpoints: signed anchor files are trust-bearing history too
+anchors/*
+!anchors/*.json
 
 # Environment variables
 .env
@@ -85,8 +94,8 @@ artifacts/*
 !artifacts/record1/
 !artifacts/demo-live/
 
-# Anchored checkpoints (runtime staging for external sync)
-anchors/
+# Anchored checkpoints: signed anchor files are trust-bearing history too
+# (whitelisted above; anchors/ line that was here previously overrode it)
 
 # Prod bind-mount runtime state (compose ./data)
 data/

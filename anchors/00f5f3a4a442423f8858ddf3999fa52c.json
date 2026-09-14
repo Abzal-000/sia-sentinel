@@ -1,0 +1,13 @@
+{
+  "protocol": "trustchain-checkpoint/2",
+  "checkpoint_id": "00f5f3a4a442423f8858ddf3999fa52c",
+  "created_at": "2026-09-13T06:39:40.227141+00:00",
+  "seq": 4,
+  "head_hash": "fa9205a32010120d6d2971f8ef14bd286d31dcd0ab332411c5a0d2b8297a2b63",
+  "registry_id": "66adde844f6f41d2b458ee6b5c1ff350",
+  "tree_size": 4,
+  "root_hash": "d51262c4e13477fb4b962bfed49d65f785cd0eb7730b82eaee2405d3186b5f0d",
+  "kid": "72e9d42116a993bd",
+  "public_key": "tqIhnSC/3xVANUtzGLsGmcVqxZ40J1jTiF1QDaQHiyw=",
+  "signature": "YtcycNnfOnJN410n0bMmZ+YWDSEqEsI5MiUoxZG3K+O9xVYb2J/PaheE7CKKMNOLL66nrUtsIg9f/bHeDRmnCQ=="
+}
