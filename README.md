@@ -337,7 +337,7 @@ sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, web
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
 docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design, demand validation + outreach drafts
-tests/          715 tests (unittest)
+tests/          724 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
@@ -346,11 +346,12 @@ audit_cli.py    CLI: audit / optimize / sign / verify
 
 Prototype-stage, fully working core: the first publicly anchored record
 (beacon, Groq, 50.5% verified savings, non-inferior verdict — see the
-Record №1 section above) plus 715 tests covering the audit engine, ledger,
+Record №1 section above) plus 724 tests covering the audit engine, ledger,
 tenancy, billing, jobs persistence, public attestation network,
 self-service onboarding, the independent verifier (including verdict
 re-derivation and the auditor-side holdout tool), and the SDK. Measured
 coverage 77% (CI enforces a 75% floor); the uncovered remainder is
-concentrated in dormant pre-beacon legacy modules scheduled for the
-Phase-2 inventory (see `docs/refactoring-plan.md`). See
+concentrated in dormant pre-beacon legacy modules — catalogued with a
+keep/freeze verdict per module in [`docs/dead-code-inventory.md`](docs/dead-code-inventory.md)
+(the Phase-2 refactoring plan governs what happens next). See
 `SECURITY_REPORT.md` for the security review.
