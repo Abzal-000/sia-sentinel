@@ -62,7 +62,11 @@ system can independently verify a savings claim without trusting the service.
   Walkthrough: [`docs/verify-in-5-minutes.md`](docs/verify-in-5-minutes.md).
 - **Verification portal:** `GET /attestations/{id}` renders a human verdict
   (signature ✓/✗, chain ✓/✗, claim, badge embed snippet); `GET /registry` is
-  the public HTML index.
+  the public HTML index. A **static export** of the same portal (verdicts
+  computed by the independent verifier — not the service — ru/kk/en,
+  `file://`-portable, no server needed) lives in [`portal/`](portal/);
+  regenerate with `python scripts/export_portal.py`. The exporter refuses
+  (exit 1) any record that fails independent verification.
 - **Opt-in public registry:** tenants publish via
   `POST /v1/tenants/{id}/settings` (`publish_attestations: true`); only opted-in
   records appear in `GET /v1/attestations`. Individual attestations stay
