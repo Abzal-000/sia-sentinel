@@ -58,6 +58,15 @@ jobs:
         python scripts/demo_full.py
         python scripts/demo_forgery.py
 
+    # P3 (2026-09-14): non-SQLite ветка пула БД (QueuePool/pre-ping —
+    # прод-конфиг) не исполнялась ни одним тестом (все гоняются через
+    # SQLite-ветку). Дым гоняет полный продуктовый цикл через
+    # QueuePool-ветку; живой Postgres-коннект — первый пункт чек-листа
+    # дня деплоя (см. докстринг скрипта).
+    - name: Run the non-SQLite DB pool smoke
+      run: |
+        python scripts/postgres_smoke.py
+
     # CI-checkout — это свежий клон: здесь постоянно живёт обещание
     # «посторонний верифицирует записи сам». Поймано красным 2026-09-14:
     # receipts/ был в .gitignore — локальная зелень, мёртвый клон.
