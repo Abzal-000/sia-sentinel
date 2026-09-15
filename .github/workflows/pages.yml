@@ -1,0 +1,36 @@
+name: Deploy verification portal to GitHub Pages
+
+# Статическая витрина (portal/) — вердикты считает независимый верификатор,
+# файлы уже в репо. Pages бесплатен на публичном репо; это публичное
+# существование реестра до полноценного деплоя Sentinel с TLS.
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'portal/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: portal
+      - id: deployment
+        uses: actions/deploy-pages@v4

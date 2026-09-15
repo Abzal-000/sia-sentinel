@@ -64,7 +64,8 @@ system can independently verify a savings claim without trusting the service.
   (signature ✓/✗, chain ✓/✗, claim, badge embed snippet); `GET /registry` is
   the public HTML index. A **static export** of the same portal (verdicts
   computed by the independent verifier — not the service — ru/kk/en,
-  `file://`-portable, no server needed) lives in [`portal/`](portal/);
+  `file://`-portable, no server needed) lives in [`portal/`](portal/) —
+  **live instance: [abzal-000.github.io/sia-sentinel](https://abzal-000.github.io/sia-sentinel/)**;
   regenerate with `python scripts/export_portal.py`. The exporter refuses
   (exit 1) any record that fails independent verification.
 - **Opt-in public registry:** tenants publish via
