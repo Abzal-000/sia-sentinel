@@ -58,17 +58,64 @@ from sentinel.auth import (
 )
 # Initialize receipt generator (Ed25519 signing) and public verifier.
 # Через resolve_env: секрет может лежать и в .env, а не только в окружении.
-# Без ключа — эфемерный + громкое предупреждение (только dev; прод требует
-# RECEIPT_SIGNING_KEY, иначе квитанции не переживут рестарт).
+#
+# Без ключа поведение зависит от SIA_STRICT_KEYS:
+#   - strict (SIA_STRICT_KEYS=1, ставится в docker-compose.prod.yml): ПАДАЕМ на
+#     старте. Эфемерный ключ в проде = квитанции не переживают рестарт (тихая
+#     необратимая потеря доказательной базы), поэтому это ошибка конфигурации,
+#     а не предупреждение.
+#   - dev/тесты (по умолчанию): эфемерный ключ + громкое предупреждение в stderr
+#     (stderr, а не stdout — в контейнере stdout буферизуется/теряется).
 RECEIPT_SIGNING_KEY = resolve_env("RECEIPT_SIGNING_KEY")
+
+_STRICT = (resolve_env("SIA_STRICT_KEYS") or "").strip().lower() in (
+    "1",
+    "true",
+    "yes",
+    "on",
+)
+
+
+def _require_persistent_keys_if_strict(strict: Optional[bool] = None) -> None:
+    """В strict-режиме отсутствие постоянных ключей — фатальная ошибка старта.
+
+    ``strict`` — переопределение для тестов; по умолчанию берётся значение
+    SIA_STRICT_KEYS, вычисленное при импорте модуля.
+    """
+    if strict is None:
+        strict = _STRICT
+    if not strict:
+        return
+    missing = [
+        name
+        for name in (
+            "RECEIPT_SIGNING_KEY",
+            "JWT_SECRET_KEY",
+            "EVIDENCE_SIGNING_KEY",
+        )
+        if not resolve_env(name)
+    ]
+    if missing:
+        raise RuntimeError(
+            "SIA_STRICT_KEYS is enabled but the following persistent secrets are "
+            f"missing: {', '.join(missing)}. Ephemeral keys make receipts, tokens "
+            "and evidence signatures unrecoverable across restarts. Set these "
+            "secrets (env or .env) before starting in strict/production mode."
+        )
+
+
+_require_persistent_keys_if_strict()
 
 if not RECEIPT_SIGNING_KEY:
     import secrets as _secrets
+    import sys as _sys
 
     RECEIPT_SIGNING_KEY = _secrets.token_hex(32)
     print(
         "WARNING: RECEIPT_SIGNING_KEY not set — generated an ephemeral key; "
-        "receipts will not survive restarts. Set RECEIPT_SIGNING_KEY in production."
+        "receipts will not survive restarts. Set RECEIPT_SIGNING_KEY in production "
+        "(or enable SIA_STRICT_KEYS=1 to fail fast instead).",
+        file=_sys.stderr,
     )
 
 receipt_generator = ReceiptGenerator(RECEIPT_SIGNING_KEY, allow_ephemeral=True)
@@ -218,10 +265,16 @@ def verify_change(
     )
 
     # 4. Combine decisions
+    # require_human_review = ручная пауза: без подтверждения человеком
+    # изменение не считается одобренным (иначе обязательная проверка
+    # обходилась автоматическим approve — тот же класс дыры, что закрыт в
+    # webhook_handler).
+    needs_human = bool(risk_assessment.requires_human_review)
     approved = bool(
         trust_decision.allowed
         and safety_approved
         and risk_assessment.recommendation != "block"
+        and not needs_human
     )
 
     reason: Optional[str] = None
@@ -232,6 +285,11 @@ def verify_change(
         reason = "; ".join(violations) or "safety_violation"
     elif risk_assessment.recommendation == "block":
         reason = f"policy_blocked: {', '.join(risk_assessment.matched_rules)}"
+    elif needs_human:
+        reason = (
+            "human_review_required: "
+            f"{', '.join(risk_assessment.matched_rules)}"
+        )
 
     # 5. Update trust
     if approved:
@@ -332,12 +390,27 @@ def list_policies(
     return policy_engine.list_policies()
 
 
+def _evidence_tenant_scope(user: User) -> Optional[str]:
+    """Вычисляет tenant-фильтр для чтения legacy-evidence.
+
+    Возвращает ``None`` для ролей, которые по замыслу видят все тенанты
+    (platform-admin, VERIFIER — это роль внешнего аудитора), иначе — идентификатор
+    тенанта вызывающего. Тенант видит ТОЛЬКО свою evidence; чужая (в т.ч. с
+    другим tenant_id) не выдаётся и выглядит как «не найдено» (404), чтобы не
+    подтверждать существование чужого evidence_id.
+    """
+    if user.is_platform_admin or user.role == UserRole.VERIFIER:
+        return None
+    return user.tenant_id
+
+
 @app.get("/v1/verifications/{evidence_id}")
 def get_verification(
     evidence_id: str,
     user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
 ) -> dict[str, Any]:
-    evidence = evidence_store.get_by_id(evidence_id)
+    scope = _evidence_tenant_scope(user)
+    evidence = evidence_store.get_by_id(evidence_id, tenant_id=scope)
 
     if evidence is None:
         raise HTTPException(status_code=404, detail="Verification not found")
@@ -371,8 +444,9 @@ def get_agent_history(
     limit: int = Query(default=100, ge=1, le=1000),
     user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
 ) -> list[dict[str, Any]]:
-    """Get verification history for agent."""
-    return evidence_store.get_by_agent(agent_id, limit=limit)
+    """Get verification history for agent (tenant-isolated)."""
+    scope = _evidence_tenant_scope(user)
+    return evidence_store.get_by_agent(agent_id, limit=limit, tenant_id=scope)
 
 
 @app.get("/v1/evidence")
@@ -381,8 +455,11 @@ def get_all_evidence(
     approved_only: bool = Query(default=False),
     user: User = Depends(require_role(UserRole.ADMIN, UserRole.VERIFIER, UserRole.USER)),
 ) -> list[dict[str, Any]]:
-    """Get all evidence with optional filtering."""
-    return evidence_store.get_all(limit=limit, approved_only=approved_only)
+    """Get all evidence with optional filtering (tenant-isolated)."""
+    scope = _evidence_tenant_scope(user)
+    return evidence_store.get_all(
+        limit=limit, approved_only=approved_only, tenant_id=scope
+    )
 
 
 # === GitHub Webhook Integration ===
@@ -537,6 +614,43 @@ webhook_dispatcher = OutboundWebhookDispatcher()
 # (для legacy-квитанций без kid).
 receipt_keyring = KeyringVerifier(receipt_generator.get_public_key())
 receipt_keyring.add_key(receipt_generator.kid, receipt_generator.get_public_key())
+
+
+def _hydrate_keyring_from_ledger() -> None:
+    """Подтягивает ВСЕ ключи, уже объявленные в цепочке, в in-memory keyring.
+
+    Ротация переключает активный генератор, но старые декларации ключей остаются
+    в леджере навсегда. Без гидратации при рестарте процесса keyring содержал бы
+    ТОЛЬКО текущий активный ключ, и квитанции, подписанные ключом ДО ротации,
+    переставали бы проходить verify (key_for(kid) -> None) — то есть после
+    рестарта система не смогла бы проверить собственную историю, что прямо
+    противоречит гарантии «квитанции проверяемы после ротации».
+
+    Идемпотентно и безопасно: неизвестные/битые декларации пропускаются, ошибка
+    загрузки одного ключа не должна ломать старт сервиса.
+    """
+    try:
+        declarations = receipt_registry.key_declarations()
+    except Exception:  # леджер ещё не создан — не страшно
+        return
+
+    for declaration in declarations:
+        decl = declaration.get("declaration") or {}
+        kid = decl.get("kid")
+        public_key = decl.get("public_key")
+
+        if not kid or not public_key:
+            continue
+
+        try:
+            receipt_keyring.add_key(kid, public_key)
+        except (ValueError, TypeError):
+            # Битая декларация не должна поднимать сервис; такая запись
+            # останется недоверенной (verify вернёт False).
+            continue
+
+
+_hydrate_keyring_from_ledger()
 
 
 def _ensure_key_declared() -> None:

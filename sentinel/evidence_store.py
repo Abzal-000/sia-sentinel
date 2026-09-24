@@ -119,12 +119,19 @@ class EvidenceStore:
         # Compare
         return hmac.compare_digest(stored_signature, computed_signature)
 
-    def get_by_id(self, evidence_id: str) -> Optional[dict[str, Any]]:
+    def get_by_id(
+        self,
+        evidence_id: str,
+        tenant_id: Optional[str] = None,
+    ) -> Optional[dict[str, Any]]:
         """
         Retrieve evidence by ID.
 
         Args:
             evidence_id: UUID of evidence
+            tenant_id: If provided, the evidence must belong to this tenant
+                (multitenancy isolation). ``None`` means no tenant filter and is
+                reserved for platform-admin/verifier internal use.
 
         Returns:
             Evidence dict or None
@@ -139,8 +146,18 @@ class EvidenceStore:
 
                     try:
                         evidence = json.loads(line)
-                        if evidence.get("evidence_id") == evidence_id:
-                            return evidence
+                        if evidence.get("evidence_id") != evidence_id:
+                            continue
+                        # Tenant isolation: a tenant-scoped read must not
+                        # return another tenant's evidence. A record with no
+                        # tenant tag is treated as belonging to no tenant and
+                        # is therefore hidden from tenant-scoped reads.
+                        if (
+                            tenant_id is not None
+                            and evidence.get("tenant_id", None) != tenant_id
+                        ):
+                            continue
+                        return evidence
                     except json.JSONDecodeError:
                         continue
 
@@ -150,6 +167,7 @@ class EvidenceStore:
         self,
         agent_id: str,
         limit: int = 100,
+        tenant_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """
         Retrieve evidence for agent.
@@ -157,6 +175,8 @@ class EvidenceStore:
         Args:
             agent_id: Agent identifier
             limit: Maximum number of records
+            tenant_id: If provided, only evidence belonging to this tenant is
+                returned (multitenancy isolation).
 
         Returns:
             List of evidence dicts (newest first)
@@ -176,6 +196,11 @@ class EvidenceStore:
 
                 try:
                     evidence = json.loads(line)
+                    if (
+                        tenant_id is not None
+                        and evidence.get("tenant_id", None) != tenant_id
+                    ):
+                        continue
                     results.append(evidence)
                 except json.JSONDecodeError:
                     continue
@@ -187,6 +212,7 @@ class EvidenceStore:
         self,
         limit: int = 100,
         approved_only: bool = False,
+        tenant_id: Optional[str] = None,
     ) -> list[dict[str, Any]]:
         """
         Retrieve all evidence.
@@ -194,6 +220,8 @@ class EvidenceStore:
         Args:
             limit: Maximum number of records
             approved_only: If True, return only approved verifications
+            tenant_id: If provided, only evidence belonging to this tenant is
+                returned (multitenancy isolation).
 
         Returns:
             List of evidence dicts (newest first)
@@ -209,6 +237,11 @@ class EvidenceStore:
 
                     try:
                         evidence = json.loads(line)
+
+                        if tenant_id is not None and evidence.get(
+                            "tenant_id", None
+                        ) != tenant_id:
+                            continue
 
                         if approved_only and not evidence.get("decision", {}).get("approved"):
                             continue

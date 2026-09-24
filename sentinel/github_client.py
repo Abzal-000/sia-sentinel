@@ -5,21 +5,36 @@ from typing import Any, Optional
 
 import requests
 
+# Таймаут по умолчанию для ВСЕХ вызовов GitHub API. Без него зависший
+# TCP-коннект (молчащий прокси, сетевой чёрный дырой) блокирует поток
+# воркера/обработчика вебхука бесконечно — доступность сервиса зависит от
+# чужого API. (connect, read) — connect ограничивает установление соединения,
+# read — ожидание ответа.
+DEFAULT_TIMEOUT = (5.0, 15.0)
+
 
 class GitHubClient:
     """
     GitHub API client for posting comments and status checks.
 
     Uses GitHub App installation token or personal access token.
+
+    Every request carries an explicit timeout (DEFAULT_TIMEOUT) and retries
+    transient failures (429/5xx/network) with bounded backoff, so a flaky or
+    hanging GitHub never stalls the audit worker indefinitely.
     """
 
     def __init__(
         self,
         token: Optional[str] = None,
         api_base: str = "https://api.github.com",
+        timeout: tuple[float, float] = DEFAULT_TIMEOUT,
+        max_retries: int = 2,
     ):
         self.token = token or os.getenv("GITHUB_TOKEN")
         self.api_base = api_base.rstrip("/")
+        self.timeout = timeout
+        self.max_retries = max(0, int(max_retries))
 
         if not self.token:
             raise ValueError(
@@ -32,6 +47,57 @@ class GitHubClient:
             "Accept": "application/vnd.github.v3+json",
             "User-Agent": "SIA-Sentinel/0.4.0",
         })
+
+    def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        retry: bool = True,
+        **kwargs: Any,
+    ) -> requests.Response:
+        """HTTP-вызов с таймаутом и ограниченными повторами на 429/5xx/сети.
+
+        Повторяются только идемпотентные по смыслу запросы (GET, и POST, который
+        не меняет состояние дважды опасно); здесь retry=True используется для
+        GET, а для POST оставлен один безопасный повтор на 5xx/429, где запрос
+        скорее всего не был применён.
+        """
+        import time
+
+        attempts = (self.max_retries + 1) if retry else 1
+        last_exc: Optional[BaseException] = None
+
+        for attempt in range(attempts):
+            try:
+                response = self.session.request(
+                    method, url, timeout=self.timeout, **kwargs
+                )
+            except requests.RequestException as exc:
+                # Сетевой сбой/таймаут — повторяем с задержкой.
+                last_exc = exc
+                if attempt == attempts - 1:
+                    raise
+                time.sleep(0.5 * (2**attempt))
+                continue
+
+            # 429/5xx и идемпотентный GET — безопасны к повтору.
+            if response.status_code in (429, 500, 502, 503, 504):
+                if attempt < attempts - 1:
+                    retry_after = response.headers.get("Retry-After")
+                    try:
+                        delay = float(retry_after) if retry_after else 0.5 * (2**attempt)
+                    except ValueError:
+                        delay = 0.5 * (2**attempt)
+                    time.sleep(min(delay, 5.0))
+                    continue
+
+            return response
+
+        # Сюда попадаем только если все попытки исчерпаны исключением.
+        if last_exc is not None:
+            raise last_exc
+        raise requests.RequestException("GitHub request failed")
 
     def post_comment(
         self,
@@ -54,10 +120,7 @@ class GitHubClient:
         """
         url = f"{self.api_base}/repos/{owner}/{repo}/issues/{pr_number}/comments"
 
-        response = self.session.post(
-            url,
-            json={"body": body},
-        )
+        response = self._request("POST", url, json={"body": body})
 
         response.raise_for_status()
         return response.json()
@@ -98,7 +161,7 @@ class GitHubClient:
         if target_url:
             payload["target_url"] = target_url
 
-        response = self.session.post(url, json=payload)
+        response = self._request("POST", url, json=payload)
         response.raise_for_status()
         return response.json()
 
@@ -121,7 +184,8 @@ class GitHubClient:
         """
         url = f"{self.api_base}/repos/{owner}/{repo}/pulls/{pr_number}"
 
-        response = self.session.get(
+        response = self._request(
+            "GET",
             url,
             headers={"Accept": "application/vnd.github.v3.diff"},
         )
@@ -148,7 +212,7 @@ class GitHubClient:
         """
         url = f"{self.api_base}/repos/{owner}/{repo}/pulls/{pr_number}"
 
-        response = self.session.get(url)
+        response = self._request("GET", url)
         response.raise_for_status()
         return response.json()
 

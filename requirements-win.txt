@@ -1,0 +1,12 @@
+# SIA / SIA Sentinel - Windows-only dependencies
+#
+# Эти пакеты ставятся ТОЛЬКО на Windows и намеренно вынесены из
+# requirements.txt: pip не устанавливает их на Linux/macOS, а CI
+# (ubuntu-latest) ставит кросс-платформенный requirements.txt.
+#
+# Локальная Windows-разработка:
+#   pip install -r requirements.txt
+#   pip install -r requirements-win.txt
+#
+# Linux/macOS/CI: requirements-win.txt НЕ устанавливать.
+pywin32==312

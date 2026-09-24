@@ -309,10 +309,19 @@ class WebhookHandler:
         )
 
         # Combine decisions
+        #
+        # require_human_review — это МАНОВАЯ ПАУЗА, а не рекомендация: пока
+        # человек не подтвердил изменение, оно НЕ должно считаться одобренным.
+        # Раньше условие было `recommendation != "block"`, из-за чего изменение,
+        # помеченное require_human (recommendation == "review"), получало
+        # approved=True и проходило как проверенное — то есть обязательная
+        # проверка человеком обходилась автоматическим «одобрением».
+        needs_human = bool(risk_assessment.requires_human_review)
         approved = bool(
             trust_decision.allowed
             and safety_approved
             and risk_assessment.recommendation != "block"
+            and not needs_human
         )
 
         reason = None
@@ -322,6 +331,11 @@ class WebhookHandler:
             reason = "; ".join(violations) or "safety_violation"
         elif risk_assessment.recommendation == "block":
             reason = f"policy_blocked: {', '.join(risk_assessment.matched_rules)}"
+        elif needs_human:
+            reason = (
+                "human_review_required: "
+                f"{', '.join(risk_assessment.matched_rules)}"
+            )
 
         # Update trust
         if approved:

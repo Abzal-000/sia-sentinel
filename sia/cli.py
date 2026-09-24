@@ -284,25 +284,44 @@ def build_multi_agent_orchestrator(
 
 
 def _ensure_utf8_console() -> None:
-    """Re-wrap a real Windows console so Unicode output is not mangled."""
+    """Переводит вывод в UTF-8, чтобы рамки/кириллица не роняли скрипт.
+
+    Windows-консоль по умолчанию отдаёт cp1251/cp866, где нет символов
+    рисования рамок (── │ ┌ └) — print() падал UnicodeEncodeError. Особенно
+    это проявлялось при ПЕРЕНАПРАВЛЕНИИ вывода в пайп (`| Select-Object`,
+    CI-лог): у redirected-потока нет TTY, старая проверка isatty() его
+    пропускала, и кодировка оставалась прежней.
+
+    Поэтому два пути:
+      * есть .buffer (настоящий/перенаправленный поток) -> пере-оборачиваем
+        в TextIOWrapper с errors="replace" (символы, которых нет, заменяются,
+        а не роняют процесс);
+      * иначе -> reconfigure(encoding="utf-8", errors="replace") у
+        TextIOWrapper (например под pytest-capture).
+    """
     if sys.platform != "win32":
         return
 
     import io
 
     for stream_name in ("stdout", "stderr"):
-        stream = getattr(sys, stream_name)
+        stream = getattr(sys, stream_name, None)
 
-        if not stream.isatty() or not hasattr(stream, "buffer"):
+        if stream is None:
             continue
 
         try:
-            setattr(
-                sys,
-                stream_name,
-                io.TextIOWrapper(stream.buffer, encoding="utf-8", errors="replace"),
-            )
-        except (ValueError, OSError):
+            if hasattr(stream, "buffer"):
+                setattr(
+                    sys,
+                    stream_name,
+                    io.TextIOWrapper(
+                        stream.buffer, encoding="utf-8", errors="replace"
+                    ),
+                )
+            elif hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError, AttributeError):
             continue
 
 

@@ -35,6 +35,7 @@ from .llm_flow import (
 )
 from .model_catalog import ModelSpec
 from .statistics import holm_bonferroni
+from .url_safety import ALLOWED_API_KEY_ENVS, assert_safe_outbound_url
 
 OPTIMIZATION_PROTOCOL = "proof-of-savings-optimization/1"
 
@@ -46,7 +47,22 @@ def spec_to_endpoint(spec: ModelSpec) -> LLMEndpointConfig:
     в спецификацию и манифест не попадает. В simulated-режиме (без base_url)
     профиль ответчика выводится из тира, чтобы кандидаты честно
     различались по токенам и латентности.
+
+    Каталог может прийти из пользовательского флоу (inline-кандидаты), поэтому
+    применяются те же ограничения, что в flow_runner: `base_url` не должен
+    вести во внутреннюю сеть, а `api_key_env` ограничен белым списком
+    провайдерских переменных (иначе флоу подставил бы произвольный секрет
+    процесса в Authorization-заголовок).
     """
+    if spec.api_key_env and spec.api_key_env not in ALLOWED_API_KEY_ENVS:
+        raise ValueError(
+            f"api_key_env {spec.api_key_env!r} is not an allowed provider key "
+            f"variable; allowed: {sorted(ALLOWED_API_KEY_ENVS)}"
+        )
+
+    if spec.base_url:
+        assert_safe_outbound_url(spec.base_url)
+
     api_key = resolve_env(spec.api_key_env) if spec.api_key_env else None
 
     simulated_profile = {"premium": "verbose", "economy": "concise"}.get(
@@ -443,17 +459,27 @@ class SavingsOptimizer:
         )
         confirmed = set(multiplicity_correction["confirmed"]) if multiplicity_correction else set(final_audits)
 
+        # Выбор финального победителя — по АБСОЛЮТНОЙ цене за вызов среди
+        # кандидатов, доказавших и качество, и экономию.
+        #
+        # Раньше здесь сравнивался savings_ratio (ОТНОСИТЕЛЬНАЯ экономия против
+        # baseline). Это не то, что обещает продукт («подбор самой дешёвой
+        # конфигурации»), и это может выбрать НЕ самый дешёвый вариант: если
+        # baseline сам подорожал, кандидат с бОЛЬШИМ процентом скидки всё равно
+        # может стоить в абсолюте ДОРОЖЕ другого кандидата с меньшим процентом,
+        # но низкой ценой. Публикуем и выбираем по реальной стоимости вызова.
         best: Optional[str] = None
-        best_ratio = 0.0
+        best_unit_cost: Optional[float] = None
 
         for name, report in final_audits.items():
             if not report.savings_verified:
                 continue
             if name not in confirmed:
                 continue
-            if report.costs.savings_ratio > best_ratio:
+            unit_cost = report.costs.new_unit_cost_usd
+            if best_unit_cost is None or unit_cost < best_unit_cost:
                 best = name
-                best_ratio = report.costs.savings_ratio
+                best_unit_cost = unit_cost
 
         manifest = {
             "protocol": OPTIMIZATION_PROTOCOL,

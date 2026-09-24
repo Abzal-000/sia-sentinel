@@ -27,7 +27,11 @@ from typing import Any, Callable, Optional, Sequence
 
 from .cost_model import CostModel, PricingConfig, SavingsResult
 from .evaluation_engine import resolve_confidence, wilson_confidence_interval
-from .statistics import non_inferiority_test
+from .statistics import (
+    DEFAULT_ABSOLUTE_QUALITY_FLOOR,
+    absolute_quality_met,
+    non_inferiority_test,
+)
 from .models import EquivalenceReport
 
 
@@ -523,23 +527,59 @@ class FlowAuditReport:
     # E6: simulated-режим честно помечается не только меткой mode, но и
     # явным предупреждением о том, что именно симулировалось.
     caveat: Optional[str] = None
+    # Абсолютный порог качества новой конфигурации. None -> дефолт из
+    # statistics (0.5). Задаётся заказчиком/аудитором ДО прогона.
+    quality_floor: Optional[float] = None
 
     @property
-    def savings_verified(self) -> bool:
-        # Первичный критерий качества — парный тест неинфериорности
-        # (формально корректный для парного дизайна). Дополнительно:
-        # нулевая дискордантность (b=c=0) означает, что наблюдаемое
-        # качество идентично — claim честен при опубликованном MDD,
-        # даже если малое n не даёт CI подтвердить неинфериорность.
+    def _effective_floor(self) -> float:
+        return (
+            DEFAULT_ABSOLUTE_QUALITY_FLOOR
+            if self.quality_floor is None
+            else float(self.quality_floor)
+        )
+
+    @property
+    def new_pass_rate(self) -> float:
+        """Наблюдаемая доля элементов датасета, пройденных новой конфигурацией."""
+        return float(self.equivalence.get("pass_rate_new", 0.0))
+
+    @property
+    def absolute_quality_ok(self) -> bool:
+        """Проходит ли новая конфигурация АБСОЛЮТНЫЙ барьер качества.
+
+        Дополняет относительный парный тест: «не хуже старого» недостаточно,
+        новая конфигурация должна сама по себе решать задачи.
+        """
+        return absolute_quality_met(self.new_pass_rate, self._effective_floor)
+
+    @property
+    def relative_non_inferior(self) -> bool:
+        """Относительный критерий: новое не хуже старого (парный тест)."""
         paired = self.equivalence.get("paired")
         if paired is not None:
-            quality_preserved = bool(paired.get("non_inferior")) or (
+            return bool(paired.get("non_inferior")) or (
                 paired.get("b_old_pass_new_fail", 0) == 0
                 and paired.get("c_old_fail_new_pass", 0) == 0
             )
-        else:
-            quality_preserved = self.equivalence.get("verdict") == "equivalent"
-        return quality_preserved and self.costs.savings_ratio > 0
+        return self.equivalence.get("verdict") == "equivalent"
+
+    @property
+    def savings_verified(self) -> bool:
+        """Итоговый клейм «экономия доказана».
+
+        Требует ОДНОВРЕМЕННО:
+        1) относительной неинфериорности (новое не хуже старого) — парный тест;
+        2) АБСОЛЮТНОГО качества (новая конфигурация реально решает задачи) —
+           иначе нулевая дискордантность при нулевой доле прохождений выпустила
+           бы квитанцию «экономия доказана» для полностью проваленной системы;
+        3) фактической экономии (savings_ratio > 0).
+        """
+        return (
+            self.relative_non_inferior
+            and self.absolute_quality_ok
+            and self.costs.savings_ratio > 0
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -557,6 +597,15 @@ class FlowAuditReport:
                     self.equivalence.get("ci_upper"),
                 ],
                 "confidence_level": self.equivalence.get("confidence_level"),
+                # Прозрачность абсолютного гейта качества: почему verified
+                # или почему нет. Неindependently-верифицируемое число, а
+                # опубликованный вход решения, входящий в подписанный отчёт.
+                "absolute_quality": {
+                    "pass_rate_new": self.new_pass_rate,
+                    "quality_floor": self._effective_floor,
+                    "absolute_met": self.absolute_quality_ok,
+                    "relative_non_inferior": self.relative_non_inferior,
+                },
             },
             "usage_old": self.usage_old.to_dict(),
             "usage_new": self.usage_new.to_dict(),
@@ -796,6 +845,7 @@ class LLMFlowAuditor:
         delta: float = 0.05,
         checkpoint_dir: Optional[Path] = None,
         candidate_selected_by: str = "user",
+        quality_floor: Optional[float] = None,
     ) -> FlowAuditReport:
         if not dataset:
             raise ValueError("Dataset must contain at least one item")
@@ -848,8 +898,18 @@ class LLMFlowAuditor:
             usage_new.unit_cost_usd,
         )
 
+        # Wilson CI считается на УРОВНЕ ЭЛЕМЕНТА датасета, а не на уровне
+        # отдельных вызовов. Повторы одного и того же промпта (repetitions>1)
+        # не являются независимыми наблюдениями: они коррелированы по построению.
+        # Счёт по trials (passed_trials/total_trials) — псевдорепликация: он
+        # завышает эффективную n и сужает доверительный интервал, делая оценку
+        # качества оптимистичнее, чем она есть. Корректная единица — элемент
+        # датасета: элемент прошёл, только если прошёл ВСЕ свои повторы
+        # (item_passes). Это и есть независимое наблюдение.
+        new_item_passes = sum(1 for p in new_passes if p)
+        new_item_total = len(new_passes)
         ci_lower, ci_upper = wilson_confidence_interval(
-            passed_trials, total_trials, confidence=confidence
+            new_item_passes, new_item_total, confidence=confidence
         )
 
         # Отчёт отдаёт фактически использованный уровень доверия,
@@ -970,4 +1030,5 @@ class LLMFlowAuditor:
             equivalence=equivalence,
             manifest=manifest,
             caveat=caveat,
+            quality_floor=quality_floor,
         )

@@ -30,6 +30,10 @@ services:
     #   - "127.0.0.1:8000:8000"
     environment:
       - PYTHONPATH=/app
+      # Строгий режим: отсутствие постоянных ключей = падение на старте, а не
+      # тихая генерация эфемерных ( defence-in-depth к обязательным ${VAR:?} выше —
+      # ловит запуск в обход compose).
+      - SIA_STRICT_KEYS=1
       # --- Обязательные секреты ---
       - JWT_SECRET_KEY=${JWT_SECRET_KEY:?JWT_SECRET_KEY is required}
       - RECEIPT_SIGNING_KEY=${RECEIPT_SIGNING_KEY:?RECEIPT_SIGNING_KEY is required}

@@ -64,10 +64,12 @@ system can independently verify a savings claim without trusting the service.
   (signature ✓/✗, chain ✓/✗, claim, badge embed snippet); `GET /registry` is
   the public HTML index. A **static export** of the same portal (verdicts
   computed by the independent verifier — not the service — ru/kk/en,
-  `file://`-portable, no server needed) lives in [`portal/`](portal/) —
-  **live instance: [abzal-000.github.io/sia-sentinel](https://abzal-000.github.io/sia-sentinel/)**;
-  regenerate with `python scripts/export_portal.py`. The exporter refuses
-  (exit 1) any record that fails independent verification.
+  `file://`-portable, no server needed) lives in [`portal/`](portal/) and is
+  deploy-ready for GitHub Pages (`.nojekyll` + `404.html` included); regenerate
+  it with `python scripts/export_portal.py`. The exporter refuses (exit 1) any
+  record that fails independent verification. **Until Pages is enabled in the
+  repository settings, open [`portal/index.html`](portal/index.html) directly
+  from a clone — it is fully self-contained.**
 - **Opt-in public registry:** tenants publish via
   `POST /v1/tenants/{id}/settings` (`publish_attestations: true`); only opted-in
   records appear in `GET /v1/attestations`. Individual attestations stay
@@ -338,7 +340,7 @@ sentinel/       API service: auth, tenancy, billing, jobs, receipts, ledger, web
 sdk/            Client SDK (sia_sentinel)
 flows/          Flow declarations (code | llm_flow | optimize)
 docs/           Attestation spec, JSON Schema, record-1 re-verification guide, holdout design, demand validation + outreach drafts
-tests/          724 tests (unittest)
+tests/          787 tests (unittest)
 dashboard/      Streamlit dashboard
 audit_cli.py    CLI: audit / optimize / sign / verify
 ```
@@ -347,7 +349,7 @@ audit_cli.py    CLI: audit / optimize / sign / verify
 
 Prototype-stage, fully working core: the first publicly anchored record
 (beacon, Groq, 50.5% verified savings, non-inferior verdict — see the
-Record №1 section above) plus 724 tests covering the audit engine, ledger,
+Record №1 section above) plus 787 tests covering the audit engine, ledger,
 tenancy, billing, jobs persistence, public attestation network,
 self-service onboarding, the independent verifier (including verdict
 re-derivation and the auditor-side holdout tool), and the SDK. Measured

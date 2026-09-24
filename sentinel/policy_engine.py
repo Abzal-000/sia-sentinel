@@ -207,6 +207,14 @@ class PolicyEngine:
         warnings = []
         requires_human = False
         recommendation = "approve"
+        # «Липкая» блокировка: сработавшее правило block нельзя понизить до
+        # review/approve НИ ЧЕМ — ни последующим правилом warning/approve, ни
+        # финальным переопределением по risk_level. Раньше recommendation
+        # перезаписывался каждым правилом, а переопределение по risk_score могло
+        # ПОНИЗИТЬ явный block до review, если суммарный score не дотянул до
+        # critical. Для контроля ИБ это тихая дыра: политика запрещала, а
+        # система разрешала.
+        blocked = False
 
         for policy in applicable_policies:
             for rule in policy.rules:
@@ -215,12 +223,15 @@ class PolicyEngine:
 
                     # Apply action
                     if rule.action == "block":
+                        blocked = True
                         recommendation = "block"
                         risk_score += rule.risk_score_delta
 
                     elif rule.action == "require_human":
                         requires_human = True
-                        recommendation = "review"
+                        # Не понижаем уже выставленный block.
+                        if not blocked:
+                            recommendation = "review"
                         risk_score += rule.risk_score_delta
 
                     elif rule.action == "warning":
@@ -228,7 +239,13 @@ class PolicyEngine:
                         risk_score += rule.risk_score_delta
 
                     elif rule.action == "approve":
+                        # approve не должен отменять ранее сработавший block/
+                        # require_human — он лишь добавляет вклад в risk_score.
                         risk_score += rule.risk_score_delta
+
+        # Блокировка «прилипает» независимо от набранного risk_score.
+        if blocked:
+            recommendation = "block"
 
         # Clamp risk score to 0-100
         risk_score = max(0, min(100, risk_score))
@@ -243,11 +260,14 @@ class PolicyEngine:
         else:
             risk_level = "low"
 
-        # Override recommendation based on risk level
+        # Переопределение по risk_level может только УСИЛИТЬ решение, но не
+        # ослабить его: явный block (blocked=True) не превращается в review,
+        # а require_human не превращается в approve.
         if risk_level == "critical":
             recommendation = "block"
         elif risk_level == "high":
-            recommendation = "review"
+            if recommendation != "block":
+                recommendation = "review"
 
         return RiskAssessment(
             risk_score=risk_score,

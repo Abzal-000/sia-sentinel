@@ -27,6 +27,17 @@ import tempfile
 import time
 from pathlib import Path
 
+# Демо рисует рамки (── │ ┌ └) и кириллицу. На Windows-консоли с кодировкой
+# cp1251 это падало UnicodeEncodeError: консоль не умеет эти символы, и скрипт
+# (который CI обязан гонять) выходил с кодом 1. Переиспользуем штатный
+# помощник проекта — он пере-оборачивает реальный TTY в UTF-8 с
+# errors="replace", так что вывод остаётся читаемым в любой консоли.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+from sia.cli import _ensure_utf8_console  # noqa: E402
+
+_ensure_utf8_console()
+
 tmp = tempfile.mkdtemp(prefix="sia_forgery_demo_")
 os.environ.update({
     "RECEIPTS_DIR": str(Path(tmp) / "receipts"),

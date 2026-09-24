@@ -351,11 +351,41 @@ def main() -> int:
 
     (out / "verify.html").write_text(_verify_page(), encoding="utf-8")
 
+    # --- Служебные файлы GitHub Pages ---
+    # .nojekyll: без него Jekyll пропускает через свой шаблон и может выкинуть
+    # файлы/каталоги, начинающиеся с "_", а также испортить раздачу вложенных
+    # путей. Для статической витрины Jekyll не нужен вообще.
+    (out / ".nojekyll").write_text("", encoding="utf-8")
+
+    # 404.html: GitHub Pages отдаёт его на несуществующий путь. Без него
+    # пользователь (и поисковик) получает стандартную страницу 404 без ссылок
+    # обратно — витрина выглядит сломанной.
+    (out / "404.html").write_text(_not_found_page(), encoding="utf-8")
+
     files = sorted(p for p in out.rglob("*") if p.is_file())
     print(f"exported {len(files)} files -> {out}")
     for f in files:
         print(f"  {f.relative_to(out)}")
     return 0
+
+
+def _not_found_page() -> str:
+    """Страница «не найдено» со ссылками обратно (Pages отдаёт её на 404)."""
+    return """<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8" /><title>Not found — SIA Sentinel</title>
+<style>body{font-family:-apple-system,Segoe UI,Roboto,sans-serif;margin:4rem auto;max-width:620px;color:#1c2733;text-align:center}
+a{color:#1565c0}</style>
+</head>
+<body>
+<h1>404 — page not found</h1>
+<p>This is a static export of the public attestation registry. The address you
+requested does not exist.</p>
+<p><a href="index.html">← Public Attestation Registry</a> &nbsp;·&nbsp;
+<a href="verify.html">Verify it yourself</a></p>
+</body>
+</html>
+"""
 
 
 def _checkpoint_count() -> int:

@@ -105,12 +105,22 @@ class SpecToEndpointTestCase(unittest.TestCase):
         self.assertEqual(economy.profile, "concise")
 
     def test_api_key_not_embedded(self) -> None:
+        # Имя env обязано быть в белом списке провайдеров (иначе ValueError —
+        # защита от подстановки произвольного секрета в Authorization).
         endpoint = spec_to_endpoint(ModelSpec(
-            model_name="m", api_key_env="SOME_KEY_ENV",
+            model_name="m", api_key_env="GROQ_API_KEY",
             input_token_usd_per_m=1.0, output_token_usd_per_m=3.0,
         ))
 
         self.assertNotIn("api_key", endpoint.public_dict())
+
+    def test_non_allowlisted_api_key_env_rejected(self) -> None:
+        """Произвольная env-переменная отвергается (эксфильтрация секрета)."""
+        with self.assertRaises(ValueError):
+            spec_to_endpoint(ModelSpec(
+                model_name="m", api_key_env="RECEIPT_SIGNING_KEY",
+                input_token_usd_per_m=1.0, output_token_usd_per_m=3.0,
+            ))
 
 
 class SavingsOptimizerTestCase(unittest.TestCase):

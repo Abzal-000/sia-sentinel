@@ -21,7 +21,12 @@ from typing import Any, Optional, Sequence
 from .cost_model import CostModel, PricingConfig, SavingsResult
 from .evaluation_engine import EvaluationEngine
 from .models import EquivalenceReport
-from .statistics import NonInferiorityResult, non_inferiority_test
+from .statistics import (
+    DEFAULT_ABSOLUTE_QUALITY_FLOOR,
+    NonInferiorityResult,
+    absolute_quality_met,
+    non_inferiority_test,
+)
 
 
 def _sha256(text: str) -> str:
@@ -40,29 +45,59 @@ class AuditReport:
     security_vulnerabilities: int
     overall_efficiency_score: float
     paired: Optional[dict[str, Any]] = None
+    # Абсолютный порог качества новой конфигурации. None -> дефолт 0.5.
+    quality_floor: Optional[float] = None
 
     @property
-    def savings_verified(self) -> bool:
-        """Экономия подтверждена: качество сохранено И деньги реально сэкономлены.
+    def _effective_floor(self) -> float:
+        return (
+            DEFAULT_ABSOLUTE_QUALITY_FLOOR
+            if self.quality_floor is None
+            else float(self.quality_floor)
+        )
 
-        A1: критерий качества — парный тест неинфериорности (Ньюкомб + δ),
-        формально корректный для парного дизайна. Как и в llm_flow: нулевая
-        дискордантность (b=c=0) означает идентичное наблюдаемое качество —
-        claim честен при опубликованном MDD, даже если малое n не даёт CI
-        подтвердить неинфериорность.
+    @property
+    def new_pass_rate(self) -> float:
+        """Наблюдаемая доля тестов сьюта, пройденных новой конфигурацией."""
+        return float(self.equivalence.get("pass_rate_new", 0.0))
+
+    @property
+    def absolute_quality_ok(self) -> bool:
+        """Новая конфигурация сама по себе решает задачи (абсолютный барьер).
+
+        Закрывает дыру «обе версии провалили весь сьют -> нулевая
+        дискордантность -> экономия якобы доказана».
         """
-        if not self.costs:
-            return False
+        return absolute_quality_met(self.new_pass_rate, self._effective_floor)
 
+    @property
+    def relative_non_inferior(self) -> bool:
+        """Относительный критерий: новое не хуже старого."""
         if self.paired is not None:
-            quality_preserved = bool(self.paired.get("non_inferior")) or (
+            return bool(self.paired.get("non_inferior")) or (
                 self.paired.get("b_old_pass_new_fail", 0) == 0
                 and self.paired.get("c_old_fail_new_pass", 0) == 0
             )
-        else:
-            quality_preserved = self.equivalence.get("verdict") == "equivalent"
+        return self.equivalence.get("verdict") == "equivalent"
 
-        return quality_preserved and self.costs.get("savings_ratio", 0.0) > 0
+    @property
+    def savings_verified(self) -> bool:
+        """Экономия подтверждена: качество сохранено И деньги сэкономлены.
+
+        Требует ОДНОВРЕМЕННО:
+        1) относительной неинфериорности (парный тест «новое не хуже старого»);
+        2) АБСОЛЮТНОГО качества (новая версия реально проходит тесты сьюта) —
+           иначе нулевая дискордантность при полном провале выпустила бы
+           квитанцию «экономия доказана» для нерабочей системы;
+        3) фактической экономии.
+        """
+        if not self.costs:
+            return False
+        return (
+            self.relative_non_inferior
+            and self.absolute_quality_ok
+            and self.costs.get("savings_ratio", 0.0) > 0
+        )
 
     def to_dict(self) -> dict[str, Any]:
         claim: dict[str, Any] = {
@@ -78,6 +113,12 @@ class AuditReport:
             self.equivalence.get("ci_upper"),
         ]
         claim["confidence_level"] = self.equivalence.get("confidence_level")
+        claim["absolute_quality"] = {
+            "pass_rate_new": self.new_pass_rate,
+            "quality_floor": self._effective_floor,
+            "absolute_met": self.absolute_quality_ok,
+            "relative_non_inferior": self.relative_non_inferior,
+        }
 
         if self.paired is not None:
             claim["delta"] = self.paired.get("delta")
@@ -146,6 +187,7 @@ class ProofOfSavingsAuditor:
         repetitions: int = 1,
         seeds: Sequence[int] = (42,),
         delta: float = 0.0,
+        quality_floor: Optional[float] = None,
     ) -> AuditReport:
         """Парный аудит: delta — заранее объявленный маркер неинфериорности.
 
@@ -220,4 +262,5 @@ class ProofOfSavingsAuditor:
             security_vulnerabilities=security_vulnerabilities,
             overall_efficiency_score=overall,
             paired=paired.to_dict() if paired is not None else None,
+            quality_floor=quality_floor,
         )

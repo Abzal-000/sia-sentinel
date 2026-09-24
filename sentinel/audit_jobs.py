@@ -145,6 +145,29 @@ class AuditJobManager:
 
     # === Внутреннее ===
 
+    def _try_claim(self, audit_id: str) -> bool:
+        """Атомарно переводит джоб pending -> running. True — захват наш.
+
+        Джоб, уже находящийся в running/completed/failed, не перезаписывается:
+        условие ``status = pending`` делает захват эксклюзивным даже при гонке
+        нескольких воркеров (recover() против обычного submit, два реплики
+        приложения). Возвращает False, если джоб уже не pending или не найден.
+        """
+        with get_db_session() as db:
+            updated = (
+                db.query(AuditJobRecord)
+                .filter(
+                    AuditJobRecord.audit_id == audit_id,
+                    AuditJobRecord.status == STATUS_PENDING,
+                )
+                .update(
+                    {AuditJobRecord.status: STATUS_RUNNING,
+                     AuditJobRecord.started_at: _utcnow()},
+                    synchronize_session=False,
+                )
+            )
+            return updated == 1
+
     def _start_worker(self, audit_id: str) -> None:
         worker = threading.Thread(
             target=self._run_job,
@@ -155,19 +178,27 @@ class AuditJobManager:
         worker.start()
 
     def _run_job(self, audit_id: str) -> None:
-        # Переводим в running и забираем декларацию флоу
+        # Атомарный захват джоба: UPDATE ... WHERE status='pending' + проверка
+        # rowcount — это compare-and-swap на уровне БД.
+        #
+        # Раньше переход делался как «прочитал status -> если не терминальный ->
+        # записал running». Между чтением и записью другой воркер (recover() на
+        # старте, второй инстанс приложения) мог прочитать тот же pending и
+        # тоже запустить аудит. Итог — двойной расход на LLM, две квитанции и
+        # две записи в леджере за один job. Теперь захват атомарен: обновление
+        # сработает ровно у одного воркера, второй увидит rowcount=0 и выйдет.
+        claimed = self._try_claim(audit_id)
+        if not claimed:
+            return
+
         with get_db_session() as db:
             record = (
                 db.query(AuditJobRecord)
                 .filter(AuditJobRecord.audit_id == audit_id)
                 .first()
             )
-
-            if record is None or record.status in _TERMINAL_STATUSES:
+            if record is None:
                 return
-
-            record.status = STATUS_RUNNING
-            record.started_at = _utcnow()
             flow = dict(record.flow_json or {})
             tenant_id = record.tenant_id
 

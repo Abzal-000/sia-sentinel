@@ -23,6 +23,7 @@ from .evaluation_engine import EvaluationEngine
 from .llm_flow import DEFAULT_REPLAY_TOLERANCE, LLMEndpointConfig, LLMFlowAuditor
 from .model_catalog import ModelCatalog, ModelSpec
 from .optimizer import OptimizationGoal, SavingsOptimizer
+from .url_safety import ALLOWED_API_KEY_ENVS, assert_safe_outbound_url
 
 # Защитные лимиты внешнего ввода.
 # MAX_DATASET_ITEMS обязан оставаться НЕ статистическим ограничением:
@@ -392,17 +393,38 @@ def _audit_llm_flow(
 
 
 def _endpoint_from_block(block: dict[str, Any]) -> LLMEndpointConfig:
-    """Общая сборка эндпоинта из блока флоу (api_key_env через resolve_env)."""
-    api_key = block.get("api_key")
+    """Общая сборка эндпоинта из блока флоу (api_key_env через resolve_env).
 
-    if not api_key and block.get("api_key_env"):
-        api_key = resolve_env(block["api_key_env"])
+    Закрывает SSRF + эксфильтрацию секретов из пользовательского флоу:
+    - `base_url` проверяется на внутренний/служебный адрес (localhost,
+      приватные сети, облачный metadata 169.254.169.254) ДО того, как по нему
+      уйдёт запрос с API-ключом;
+    - `api_key_env` ограничен белым списком провайдерских переменных, поэтому
+      флоу не может подставить произвольный секрет процесса в заголовок.
+    """
+    base_url = block.get("base_url")
+
+    if base_url:
+        # Валидируем ДО резолва ключа: при внутреннем адресе секрет наружу не
+        # должен уходить ни при каких условиях.
+        assert_safe_outbound_url(base_url)
+
+    api_key = block.get("api_key")
+    key_env = block.get("api_key_env")
+
+    if not api_key and key_env:
+        if key_env not in ALLOWED_API_KEY_ENVS:
+            raise ValueError(
+                f"api_key_env {key_env!r} is not an allowed provider key "
+                f"variable; allowed: {sorted(ALLOWED_API_KEY_ENVS)}"
+            )
+        api_key = resolve_env(key_env)
 
     return LLMEndpointConfig(
         model_name=block.get("model_name", "unknown-model"),
         input_token_usd_per_m=block.get("input_token_usd_per_m"),
         output_token_usd_per_m=block.get("output_token_usd_per_m"),
-        base_url=block.get("base_url"),
+        base_url=base_url,
         api_key=api_key,
         temperature=block.get("temperature", 0.0),
         reasoning_effort=block.get("reasoning_effort"),

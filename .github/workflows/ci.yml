@@ -29,6 +29,18 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-pip-
 
+    - name: Guard: requirements must stay cross-platform
+      # Windows-only пакеты в requirements.txt роняют весь CI на ubuntu
+      # (pip: "not a supported wheel on this platform"), причём падение
+      # выглядит как мгновенный failure без внятного шага. Проверяем ДО
+      # установки, чтобы причина была названа прямо.
+      run: |
+        if grep -nE '^(pywin32|pywin32-ctypes|pywinpty)==' requirements.txt; then
+          echo "::error::requirements.txt contains Windows-only packages."
+          echo "Move them to requirements-win.txt — CI installs this file on Linux."
+          exit 1
+        fi
+
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip

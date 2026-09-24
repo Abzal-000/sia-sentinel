@@ -1,5 +1,13 @@
 # SIA / SIA Sentinel - runtime dependencies (pinned)
 # Python 3.11+
+#
+# КРОСС-ПЛАТФОРМЕННЫЙ файл. Windows-only пакеты (pywin32) здесь НЕ держатся:
+# pip не встаёт на Linux/macOS, а CI (ubuntu-latest) ставит именно этот файл —
+# присутствие pywin32 здесь роняло джоб на шаге Install dependencies за
+# секунды (двухсекундный failure = падение до старта тестов).
+# Локальная Windows-разработка: pip install -r requirements.txt
+#   && pip install -r requirements-win.txt
+# Docker-образ использует requirements-docker.txt (без Windows-only пакетов).
 altair==6.2.2
 annotated-types==0.8.0
 anthropic==0.121.0
@@ -54,7 +62,6 @@ Pygments==2.20.0
 PyJWT==2.13.0
 python-dateutil==2.9.0.post0
 python-multipart==0.0.32
-pywin32==312
 PyYAML==6.0.3
 referencing==0.37.0
 requests==2.34.2
